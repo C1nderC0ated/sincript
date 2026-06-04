@@ -33,7 +33,7 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 | 3 | Privacy & telemetry | Telemetry, ad ID, Cortana/web search, location, feedback off |
 | 4 | Power plan | High-performance / Ultimate plan, disable sleep & disk timeouts |
 | 5 | Network & DNS | TCP tuning, DNS provider switch, full network stack reset |
-| 6 | Apps & files | OpenAsar for Discord, Unity `boot.config`, custom `hosts` file |
+| 6 | Apps & files | OpenAsar for Discord, Unity `boot.config`, custom `hosts` file, lightweight Steam launcher |
 | 7 | Advanced | At-your-own-risk items: CPU mitigations, boot timers, NVMe flags, IPv6, memory compression, GPU telemetry |
 | 8 | Backups & status | Restore point, full registry export, current-status report |
 | 9 | Apply recommended safe set | One-click core tweaks from categories 1–5 (no prompts) |
@@ -43,7 +43,7 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 ### Sub-menus
 - **Cleanup & repair** — Disk cleanup · SFC + DISM repair · Windows Update reset · re-register Microsoft Store · compact WinSxS.
 - **Network & DNS** — Apply TCP tweaks · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
-- **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts`.
+- **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut).
 - **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA / AMD aware).
 - **Backups & status** — Create a System Restore Point · export HKLM + HKCU · show the current state of key tweaks, the active power plan, DNS, TCP settings, the `hosts` line count, and whether OpenAsar is installed.
 
@@ -81,6 +81,8 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 - **`app.asar`** — an OpenAsar build for the Discord action. If it isn't present, the script offers to download the latest nightly from the official OpenAsar GitHub releases.
 - **`boot.config`** — a Unity engine boot configuration applied to a game's `*_Data` folder.
 - **`hosts`** — an ad/telemetry blocklist that the "apply hosts" action installs (the original is backed up first).
+
+**SteamLight** does not require a bundled file. The *Apps & files → Install SteamLight* action finds your Steam folder via the registry, writes a `SteamLight.bat` launcher **into that folder**, and adds a `SteamLight` shortcut to your Desktop. The launcher starts Steam with resource-saving flags (single process / single core, no shaders, no shared textures, no Big Picture, high-DPI off, etc.) for lower RAM/CPU use. It references `steam.exe` relative to its own folder, so it keeps working even if Steam is installed on another drive. To change the flags, edit the single `_SLFLAGS=` line in the script.
 
 ---
 
