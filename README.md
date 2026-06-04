@@ -86,6 +86,36 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 
 ---
 
+## Recent changes
+
+### Console compatibility (Windows 10 / Server 2022)
+
+Users on Windows 10 and Windows Server 2022 reported a cluttered menu where every `echo` and `set` command was printed before its output. That happened when `@echo off` did not take effect — most often because the script was saved with a **UTF-8 BOM**, which legacy `cmd.exe` mishandles.
+
+Fixes in the current `PerfTweaks.cmd`:
+
+- File is **ASCII-only, no BOM** (safe encoding for `.cmd` on all supported Windows versions).
+- Redundant `echo off` guard at startup.
+- UAC relaunch sets **`-WorkingDirectory`** to the script folder and runs **`cd /d "%~dp0"`** so the console prompt is not stuck in `System32`.
+- **`mode`** / **`color`** errors are suppressed on narrow or restricted consoles (e.g. Server Core).
+- The header logo uses **ASCII art** instead of Unicode box-drawing characters (which break on CP437 consoles).
+
+### Unity `boot.config` — CPU-aware apply
+
+The *Apps & files → Place Unity boot.config* action no longer copies the template verbatim. It now:
+
+1. Detects physical core count (PowerShell CIM, then WMIC, then `%NUMBER_OF_PROCESSORS%`, then a manual prompt if detection fails).
+2. Sets **`job-worker-count`** and **`job-worker-maximum-count`** to **cores − 1** (min 1, max 32) before copying into the game's `*_Data` folder.
+3. Shows the detected CPU info and chosen worker count before asking for the game path.
+
+The bundled `boot.config` values for those keys are placeholders; they are always overwritten at apply time.
+
+### Bundled-file error handling
+
+If **`boot.config`** or **`hosts`** is missing or empty next to `PerfTweaks.cmd`, the script stops with a clear message: expected path, what the file is for, and how to fix it (copy from the Sincript package). Copy failures for Unity paths or the system `hosts` file also report actionable causes (permissions, AV tamper protection, game still running).
+
+---
+
 ## Notes & caveats
 
 - **Run as administrator.** HKLM changes, services, scheduled tasks, BCD edits, and restore points all need elevation. The script elevates itself; just approve UAC.
