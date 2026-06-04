@@ -53,18 +53,18 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 
 The script is built around being undoable.
 
-- **Per-value registry backups.** Before changing any registry value, the script saves a small `.reg` file containing **only that one value's previous state** to `C:\PerfTweaks_Backups`. Double-click that `.reg` to put the value back. (It backs up just the value, not the whole key, so backups stay tiny — typically about 1 KB each.)
-- **Full registry export** (optional) — exports all of `HKLM` and `HKCU` to `C:\PerfTweaks_Backups`.
+- **Per-value registry backups.** Before changing any registry value, the script saves a small `.reg` file containing **only that one value's previous state** to `Documents\PerfTweaks_Backups`. Double-click that `.reg` to put the value back. (It backs up just the value, not the whole key, so backups stay tiny — typically about 1 KB each.)
+- **Full registry export** (optional) — exports all of `HKLM` and `HKCU` to `Documents\PerfTweaks_Backups`.
 - **System Restore Point** (optional) — created on demand; `Apply recommended safe set` also offers to make one first.
-- **Log file** — every action is logged to `C:\PerfTweaks_Backups\PerfTweaks_<random>.log`.
+- **Log file** — every action is logged to `Documents\PerfTweaks_Backups\PerfTweaks_<random>.log`.
 
-All backups and logs live in **`C:\PerfTweaks_Backups`**.
+All backups and logs live in **`Documents\PerfTweaks_Backups`** — a `PerfTweaks_Backups` folder inside your user **Documents** folder. The script auto-detects the real Documents path (including OneDrive-redirected Documents) and falls back to `%USERPROFILE%\Documents` if needed.
 
 ## Reverting changes
 
 | Change | How to undo |
 |--------|-------------|
-| Any single registry tweak | Double-click its `.reg` backup in `C:\PerfTweaks_Backups` |
+| Any single registry tweak | Double-click its `.reg` backup in `Documents\PerfTweaks_Backups` |
 | CPU mitigations | Advanced → **Enable mitigations** |
 | Boot (BCD) timers | Advanced → **Revert BCD timers** |
 | DNS | Network → DNS → **Automatic (DHCP)** |
@@ -87,6 +87,10 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 ---
 
 ## Recent changes
+
+### Backup location moved to Documents
+
+Backups and logs are now created in **`Documents\PerfTweaks_Backups`** (inside your user Documents folder) instead of the drive root (`C:\PerfTweaks_Backups`). The script resolves the real Documents path from the registry, so it also works when Documents is redirected to OneDrive, and falls back to `%USERPROFILE%\Documents` if that lookup fails.
 
 ### Console compatibility (Windows 10 / Server 2022)
 
@@ -119,6 +123,7 @@ If **`boot.config`** or **`hosts`** is missing or empty next to `PerfTweaks.cmd`
 ## Notes & caveats
 
 - **Run as administrator.** HKLM changes, services, scheduled tasks, BCD edits, and restore points all need elevation. The script elevates itself; just approve UAC.
+- **Backups go to your Documents.** They are written under the account that is elevated. On a normal single-admin PC (UAC consent prompt) that is your own Documents folder; if you elevate with a *different* administrator account, the backups land in that account's Documents instead.
 - **A reboot is recommended** after several tweaks (memory compression, mitigations, NVMe flags, boot timers) for them to fully take effect.
 - **Brief minimized windows.** Some actions (DNS, Store re-register, OpenAsar download, restore point, the status screen) run PowerShell in a short-lived minimized window so the main window's font/colors are not disturbed. The flicker is normal.
 - **The "Advanced" menu is genuinely advanced.** A few highlights:
