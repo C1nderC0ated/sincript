@@ -29,11 +29,11 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 | # | Item | What it covers |
 |---|------|----------------|
 | 1 | Cleanup & repair | Temp/log cleanup, SFC/DISM, Windows Update reset, Store repair, WinSxS compaction |
-| 2 | Performance tweaks | GameDVR off, game-task priorities, snappier UI timings |
+| 2 | Performance tweaks | GameDVR off, game-task priorities, snappier UI timings, optional Game Mode toggle |
 | 3 | Privacy & telemetry | Telemetry, ad ID, Cortana/web search, location, feedback off |
-| 4 | Power plan | High-performance / Ultimate plan, disable sleep & disk timeouts |
+| 4 | Power plan | High-performance / Ultimate plan, disable sleep & disk timeouts, optional 5% min processor state |
 | 5 | Network & DNS | TCP tuning, DNS provider switch, full network stack reset |
-| 6 | Apps & files | OpenAsar for Discord, Unity `boot.config`, custom `hosts` file, lightweight Steam launcher |
+| 6 | Apps & files | OpenAsar for Discord, Unity `boot.config`, custom `hosts` file, lightweight Steam launcher, Windows timer resolution |
 | 7 | Advanced | At-your-own-risk items: CPU mitigations, boot timers, NVMe flags, IPv6, memory compression, GPU telemetry |
 | 8 | Backups & status | Restore point, full registry export, current-status report |
 | 9 | Apply recommended safe set | One-click core tweaks from categories 1–5 (no prompts) |
@@ -43,7 +43,7 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 ### Sub-menus
 - **Cleanup & repair** — Disk cleanup · SFC + DISM repair · Windows Update reset · re-register Microsoft Store · compact WinSxS.
 - **Network & DNS** — Apply TCP tweaks · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
-- **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut).
+- **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut) · apply or remove a higher **timer resolution** (SetTimerResolution autostart) · remove built-in Store apps (**debloat**).
 - **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA / AMD aware).
 - **Backups & status** — Create a System Restore Point · export HKLM + HKCU · show the current state of key tweaks, the active power plan, DNS, TCP settings, the `hosts` line count, and whether OpenAsar is installed.
 
@@ -69,6 +69,10 @@ All backups and logs live in **`Documents\PerfTweaks_Backups`** — a `PerfTweak
 | Boot (BCD) timers | Advanced → **Revert BCD timers** |
 | DNS | Network → DNS → **Automatic (DHCP)** |
 | Custom `hosts` | Apps & files → **Restore hosts** |
+| Timer resolution | Apps & files → **Remove timer resolution** |
+| Windows Game Mode | Settings → Gaming → Game Mode (or merge the value backup) |
+| Minimum processor state | Control Panel → power plan → set back to 100% |
+| Removed built-in apps (debloat) | Reinstall from the Microsoft Store |
 | Memory compression | PowerShell: `Enable-MMAgent -MemoryCompression` |
 | Everything at once | Roll back to the **System Restore Point**, or import the **full registry backup** |
 
@@ -78,15 +82,24 @@ All backups and logs live in **`Documents\PerfTweaks_Backups`** — a `PerfTweak
 
 Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optional:
 
-- **`app.asar`** — an OpenAsar build for the Discord action. If it isn't present, the script offers to download the latest nightly from the official OpenAsar GitHub releases.
+- **`app.asar`** — an OpenAsar build for the Discord action. If it isn't present, the script offers to download the latest nightly from the official OpenAsar GitHub releases (https://github.com/GooseMod/OpenAsar).
 - **`boot.config`** — a Unity engine boot configuration applied to a game's `*_Data` folder.
 - **`hosts`** — an ad/telemetry blocklist that the "apply hosts" action installs (the original is backed up first).
+- **`SetTimerResolution.exe`** — the timer-resolution helper from [valleyofdoom/TimerResolution](https://github.com/valleyofdoom/TimerResolution). *Apps & files → Apply timer resolution* copies it to `C:\ProgramData\Sincript`, registers a hidden logon task that holds your chosen resolution, and (on Windows 10 2004+/11) sets the registry switch that makes the change system-wide.
 
 **SteamLight** does not require a bundled file. The *Apps & files → Install SteamLight* action finds your Steam folder via the registry, writes a `SteamLight.bat` launcher **into that folder**, and adds a `SteamLight` shortcut to your Desktop. The launcher starts Steam with resource-saving flags (single process / single core, no shaders, no shared textures, no Big Picture, high-DPI off, etc.) for lower RAM/CPU use. It references `steam.exe` relative to its own folder, so it keeps working even if Steam is installed on another drive. To change the flags, edit the single `_SLFLAGS=` line in the script.
 
 ---
 
 ## Recent changes
+
+### Tweaks adopted from a community optimization guide
+
+After reviewing a widely-shared Windows 11 gaming optimization guide, a few safe, scriptable items were folded in — all opt-in and reversible. The **BCD timer** action now also sets `useplatformtick yes` to match the guide’s recommended timer combo. **Power plan** gained an optional *minimum processor state = 5%* (lets the CPU idle down to save power with no FPS loss). **Performance** gained an optional *disable Windows Game Mode* toggle (contested — some titles run smoother without it, but Microsoft says it can help, so try both). And **Apps & files** gained a *debloat* action that removes built-in Store apps in opt-in groups (standard bloat; optional apps like Camera / Snipping Tool; OneDrive) — anything removed is reinstallable from the Microsoft Store. Manual or external-tool steps from that guide (driver installs, NVIDIA control-panel values, RTSS frame caps, ISLC, third-party antivirus, activation scripts) were intentionally left out, and the *What was excluded* screen now explains why.
+
+### Timer resolution (SetTimerResolution)
+
+*Apps & files → Apply timer resolution* installs the bundled `SetTimerResolution.exe` as a hidden logon task (Task Scheduler) that raises the Windows timer resolution and holds it. You pick the resolution in 100ns units (default `5000` = 0.5 ms). On Windows 10 2004+ / 11 it also sets `GlobalTimerResolutionRequests = 1` under `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel`, so the change applies system-wide rather than only to the helper process — that part needs a **reboot**. *Remove timer resolution* deletes the task, stops the helper, removes the copied file, and can revert the registry switch.
 
 ### Backup location moved to Documents
 
@@ -124,7 +137,7 @@ If **`boot.config`** or **`hosts`** is missing or empty next to `PerfTweaks.cmd`
 
 - **Run as administrator.** HKLM changes, services, scheduled tasks, BCD edits, and restore points all need elevation. The script elevates itself; just approve UAC.
 - **Backups go to your Documents.** They are written under the account that is elevated. On a normal single-admin PC (UAC consent prompt) that is your own Documents folder; if you elevate with a *different* administrator account, the backups land in that account's Documents instead.
-- **A reboot is recommended** after several tweaks (memory compression, mitigations, NVMe flags, boot timers) for them to fully take effect.
+- **A reboot is recommended** after several tweaks (memory compression, mitigations, NVMe flags, boot timers, timer resolution) for them to fully take effect.
 - **Brief minimized windows.** Some actions (DNS, Store re-register, OpenAsar download, restore point, the status screen) run PowerShell in a short-lived minimized window so the main window's font/colors are not disturbed. The flicker is normal.
 - **The "Advanced" menu is genuinely advanced.** A few highlights:
   - *Disable CPU mitigations* trades security hardening (Spectre/Meltdown-class) for speed. Only do this on a machine where you understand the trade-off.
@@ -135,7 +148,7 @@ If **`boot.config`** or **`hosts`** is missing or empty next to `PerfTweaks.cmd`
 
 ## "What was excluded" — the philosophy
 
-The in-app **`10. What was excluded`** screen lists, by category, the popular "tweaks" this script intentionally omits — for example security-weakening changes (disabling Defender, the firewall, UAC, or SmartScreen), placebo or obsolete registry values, firewall rules that block Google/YouTube IP ranges, hard-coded MTU values, and bulk undocumented GPU dumps. Read it to understand the safety rationale.
+The in-app **`10. What was excluded`** screen lists, by category, the popular "tweaks" this script intentionally omits — for example security-weakening changes (disabling Defender, the firewall, UAC, or SmartScreen), placebo or obsolete registry values, firewall rules that block Google/YouTube IP ranges, hard-coded MTU values, and bulk undocumented GPU dumps. It also covers items from popular gaming guides that are deliberately skipped — Windows activation scripts, replacing Defender with a third-party antivirus, aggressive RAM / standby “cleaners”, and forcing MSI mode or NIC parameter edits (which the experienced guides themselves advise against). Read it to understand the safety rationale.
 
 ---
 
