@@ -37,7 +37,8 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 | 7 | Advanced | At-your-own-risk items: CPU mitigations, boot timers, NVMe flags, IPv6, memory compression, GPU telemetry |
 | 8 | Backups & status | Restore point, full registry export, current-status report |
 | 9 | Apply recommended safe set | One-click core tweaks from categories 1–5 (no prompts) |
-| 10 | What was excluded | Explains what the script deliberately leaves out, and why |
+| 10 | Presets | Auto-apply **light / moderate / heavy** preset, build your own **custom** preset, or restore a preset's JSON backup |
+| 11 | What was excluded | Explains what the script deliberately leaves out, and why |
 | 0 | Exit | |
 
 ### Sub-menus
@@ -45,7 +46,81 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 - **Network & DNS** — Apply TCP tweaks · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
 - **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut) · apply or remove a higher **timer resolution** (SetTimerResolution autostart) · remove built-in Store apps (**debloat**).
 - **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA / AMD aware).
-- **Backups & status** — Create a System Restore Point · export HKLM + HKCU · show the current state of key tweaks, the active power plan, DNS, TCP settings, the `hosts` line count, and whether OpenAsar is installed.
+- **Presets** — Apply a built-in **light**, **moderate**, or **heavy** preset (no per-item prompts) · apply a **custom** preset from a `.preset` file · **restore** the registry values a preset changed from one of its JSON backups.
+- **Backups & status** — Create a System Restore Point · export HKLM + HKCU · restore from a preset JSON backup · show the current state of key tweaks, the active power plan, DNS, TCP settings, the `hosts` line count, and whether OpenAsar is installed.
+
+---
+
+## Presets
+
+**`10. Presets`** applies a whole bundle of tweaks in one go, with **no per-item prompts** (a couple of yes/no questions only — restore point, and DNS choice where relevant). There are three built-in presets plus your own custom presets.
+
+| Preset | What it applies | DNS |
+|--------|-----------------|-----|
+| **Light** | Cleanup core (temp/log cleanup, DNS flush), privacy/telemetry core, network core (TCP autotuning, RSS/RSC). Nothing risky. | Asks (Cloudflare / Google / Quad9 / skip) |
+| **Moderate** | The full **recommended safe set** (cleanup + privacy + performance + power + network cores) — same as menu item 9. Optionally installs OpenAsar if a bundled `app.asar` is present. | — (uses the safe set; DNS unchanged) |
+| **Heavy** | Everything in the safe set **plus** foreground/latency tuning: `SystemResponsiveness = 0`, network throttling off, `Win32PrioritySeparation = 42`, Game Mode off, Nagle off, IPv6 off, NVMe flags, GPU telemetry off, BCD timers, memory compression off. | Asks (Cloudflare / Google / Quad9 / skip) |
+
+**Heavy deliberately does *not* include** CPU-mitigation changes, network-stack reset, system repair (SFC/DISM), debloat, `LargeSystemCache`, or the timer-resolution autostart — those stay manual under their own menus. Heavy shows a warning and offers a restore point first.
+
+### Preset backups (JSON)
+
+Manual menu actions each write their own tiny `.reg` backup. **Presets are different:** every registry value a preset changes is recorded into **one JSON file** in `Documents\PerfTweaks_Backups`, named `Preset_<name>_<random>.json`. The script prints the exact path when the preset finishes.
+
+To put those registry values back, use **`8. Backups & status → 4. Restore from a preset backup (JSON)`** (also reachable from the Presets menu). It reads the JSON and, for each value, either restores the previous data or deletes the value if it didn't exist before.
+
+> The JSON backup covers **registry values only**. The non-registry parts of a preset — power plan, DNS, BCD timers, services/scheduled tasks — are reverted from their own menus (see the *Reverting changes* table). A System Restore Point (offered before moderate/heavy) rolls back everything at once.
+
+## Custom presets
+
+You can define your own preset as a small text file and have the script apply it.
+
+1. Create a folder named **`sincript_presets`** next to `PerfTweaks.cmd`.
+2. Put a text file in it ending in **`.preset`** (e.g. `mypreset.preset`). A ready-to-edit **`example.preset`** ships with Sincript.
+3. Run **`10. Presets → 4. Custom preset`**, pick your file from the list, review the summary, and confirm.
+
+### File format
+
+- One directive per line, written as **`key=value`**.
+- **No spaces around the `=`** (`cleanup=1`, not `cleanup = 1`).
+- Start each directive in **column 1** (no leading spaces).
+- A line beginning with **`#`** or **`;`** is a comment and is ignored.
+- **Inline comments are not supported** — don't put `# note` after a value; put comments on their own lines.
+
+### Keys
+
+| Key | Value | Effect |
+|-----|-------|--------|
+| `cleanup` | `1` | Cleanup core (temp/log cleanup, DNS flush) |
+| `privacy` | `1` | Privacy/telemetry core |
+| `performance` | `1` | Performance core (GameDVR off, game-task priorities, UI timings) |
+| `power` | `1` | Power core (Ultimate/High plan, no sleep/disk timeouts) |
+| `network` | `1` | Network core (TCP autotuning, RSS/RSC) |
+| `openasar` | `1` | Install OpenAsar **from a bundled `app.asar` only** (no download) |
+| `gamemode_off` | `1` | Disable Windows Game Mode |
+| `systemresponsiveness` | `0` | `SystemResponsiveness = 0` (favor foreground) |
+| `networkthrottling_off` | `1` | Network throttling off (`0xFFFFFFFF`) |
+| `largesystemcache` | `1` | Enable `LargeSystemCache` *(situational; can hurt on desktops)* |
+| `minprocstate5` | `1` | Minimum processor state 5% |
+| `bcdtimers` | `1` | BCD timer set (`useplatformclock` off, `useplatformtick`/`disabledynamictick` on, TSC enhanced) |
+| `ipv6_off` | `1` | Disable IPv6 (`DisabledComponents = 0xFF`) |
+| `memcompress_off` | `1` | Disable memory compression *(raises RAM pressure on low-memory PCs)* |
+| `nvme_flags` | `1` | NVMe feature flags *(may be blocked on fully-patched Windows)* |
+| `gpu_telemetry_off` | `1` | Disable GPU telemetry (NVIDIA tasks + opt-out; no-op on AMD) |
+| `nagle_off` | `1` | Disable Nagle on all interfaces (`TcpAckFrequency` / `TCPNoDelay`) |
+| `win32priority` | `42` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `2` = Windows default |
+| `dns` | `cloudflare`, `google`, or `quad9` | Set DNS on all active adapters |
+
+Keys not listed here (and `1`-keys given any value other than the one shown) are **rejected**.
+
+### What happens with a bad file
+
+The script validates the whole file first and shows a summary: how many directives it recognized and how many problems it found. Each problem is listed (`unknown key`, or `bad value … (expected …)`). Then:
+
+- **Some valid, some bad** → it reports the problems and asks whether to apply the valid ones anyway.
+- **Nothing valid** → it aborts without changing anything and points you back to this key list.
+
+Like the built-in presets, a custom preset writes a single JSON registry backup you can restore from the Backups menu.
 
 ---
 
@@ -74,6 +149,7 @@ All backups and logs live in **`Documents\PerfTweaks_Backups`** — a `PerfTweak
 | Minimum processor state | Control Panel → power plan → set back to 100% |
 | Removed built-in apps (debloat) | Reinstall from the Microsoft Store |
 | Memory compression | PowerShell: `Enable-MMAgent -MemoryCompression` |
+| Registry values changed by a preset | Backups & status → **Restore from a preset backup (JSON)** (or run the relevant menu item to reverse it) |
 | Everything at once | Roll back to the **System Restore Point**, or import the **full registry backup** |
 
 ---
@@ -92,6 +168,14 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 ---
 
 ## Recent changes
+
+### Presets, custom presets, and JSON backups
+
+A new **`10. Presets`** menu applies tweaks in bundles instead of one screen at a time. Three built-in presets — **light**, **moderate**, and **heavy** — run with no per-item prompts (just a restore-point and DNS yes/no where relevant); see the *Presets* section above for exactly what each one changes and what heavy deliberately leaves out. You can also write your own **custom preset** as a `key=value` text file in a `sincript_presets\` folder (a sample `example.preset` is included) and apply it from the same menu; the script validates the file, reports any unknown keys or bad values, and asks before applying. Unlike the per-action `.reg` backups, **every registry value a preset changes is saved into a single JSON file** in `Documents\PerfTweaks_Backups`, and a new **Backups → Restore from a preset backup (JSON)** action puts those values back. (The main menu's *What was excluded* screen moved from item 10 to **item 11** to make room.)
+
+### Console-font fix for two more PowerShell calls
+
+All PowerShell in Sincript now runs in a short-lived **minimized window** so it can't disturb the main console's font or colors. Two spots that still called PowerShell inline were switched to that pattern: the **CPU core detection** used by the Unity `boot.config` action, and the **`boot.config` rewrite** step itself (its input/output paths are now passed via environment variables so spaces or quotes can't break the command, and its exit code is read back reliably).
 
 ### Tweaks adopted from a community optimization guide
 
