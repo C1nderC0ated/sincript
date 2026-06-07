@@ -96,7 +96,7 @@ You can define your own preset as a small text file and have the script apply it
 | `performance` | `1` | Performance core (GameDVR off, game-task priorities, UI timings) |
 | `power` | `1` | Power core (Ultimate/High plan, no sleep/disk timeouts) |
 | `network` | `1` | Network core (TCP autotuning, RSS/RSC) |
-| `openasar` | `1` | Install OpenAsar **from a bundled `app.asar` only** (no download) |
+| `openasar` | `1` | Install OpenAsar silently |
 | `gamemode_off` | `1` | Disable Windows Game Mode |
 | `systemresponsiveness` | `0` | `SystemResponsiveness = 0` (favor foreground) |
 | `networkthrottling_off` | `1` | Network throttling off (`0xFFFFFFFF`) |
