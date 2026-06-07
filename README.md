@@ -108,7 +108,7 @@ You can define your own preset as a small text file and have the script apply it
 | `nvme_flags` | `1` | NVMe feature flags *(may be blocked on fully-patched Windows)* |
 | `gpu_telemetry_off` | `1` | Disable GPU telemetry (NVIDIA tasks + opt-out; no-op on AMD) |
 | `nagle_off` | `1` | Disable Nagle on all interfaces (`TcpAckFrequency` / `TCPNoDelay`) |
-| `win32priority` | `42` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `2` = Windows default |
+| `win32priority` | `42`, `26` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `26` = short variable quantum (strong foreground) `2` = Windows default |
 | `dns` | `cloudflare`, `google`, or `quad9` | Set DNS on all active adapters |
 
 Keys not listed here (and `1`-keys given any value other than the one shown) are **rejected**.
