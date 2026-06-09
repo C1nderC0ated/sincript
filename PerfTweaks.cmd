@@ -1602,7 +1602,7 @@ call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32P
 goto :eof
 
 :DoWin32_26
-call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 26 (0x1A)"
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 26 "Win32PrioritySeparation = 26 (0x1A)"
 goto :eof
 
 :DoWin32_2
@@ -1663,32 +1663,33 @@ for /f "tokens=*" %%K in ('reg query "HKLM\SYSTEM\CurrentControlSet\Services\Tcp
 goto :eof
 
 :DoOpenAsarSilent
-rem  non-interactive OpenAsar install for presets
-rem  (no download prompt). For the download option, use Apps & files > Install OpenAsar.
+rem  Non-interactive OpenAsar install for presets: use a bundled app.asar if present,
+rem  otherwise download the latest nightly. No prompts (Apps & files has the interactive one).
 set "_SRC="
 if exist "%SCRIPT_DIR%app.asar" set "_SRC=%SCRIPT_DIR%app.asar"
-if not defined _SRC (
-echo OpenAsar: no bundled app.asar next to the script.
-echo Downloading OpenAsar nightly...
-start "" /min /wait powershell -NoProfile -Command "try{Invoke-WebRequest -Uri 'https://github.com/GooseMod/OpenAsar/releases/download/nightly/app.asar' -OutFile (Join-Path $env:TEMP 'openasar_nightly.asar') -UseBasicParsing}catch{exit 1}"
-set "_SRC=%TEMP%\openasar_nightly.asar"
-taskkill /f /im Discord.exe       >nul 2>&1
-taskkill /f /im DiscordPTB.exe    >nul 2>&1
-taskkill /f /im DiscordCanary.exe >nul 2>&1
-timeout /t 3 >nul
-set "_DONE=0"
-for %%F in (Discord DiscordPTB DiscordCanary) do if exist "%LocalAppData%\%%F\" call :InstallAsarInto "%LocalAppData%\%%F" "%%F" "%_SRC%"
-if "%_DONE%"=="0" echo [ERROR] No Discord install with a resources\app.asar found. ^(Store version unsupported.^)
-if exist "%LocalAppData%\Discord\Update.exe" start "" "%LocalAppData%\Discord\Update.exe" --processStart Discord.exe
-goto :eof
+if defined _SRC goto _oasInstall
+echo   ^> OpenAsar: no bundled app.asar found - downloading the latest nightly...
+call :Log "PRESET OpenAsar: downloading nightly"
+set "PT_OA=%TEMP%\openasar_nightly.asar"
+del "%PT_OA%" >nul 2>&1
+start "" /min /wait powershell -NoProfile -Command "try{Invoke-WebRequest -Uri 'https://github.com/GooseMod/OpenAsar/releases/download/nightly/app.asar' -OutFile $env:PT_OA -UseBasicParsing}catch{exit 1}"
+if not exist "%PT_OA%" (
+    echo [ERROR] OpenAsar download failed - skipping. Put app.asar next to the script and retry.
+    call :Log "PRESET OpenAsar: download failed"
+    set "PT_OA="
+    goto :eof
 )
+set "_SRC=%PT_OA%"
+set "PT_OA="
+:_oasInstall
 echo   ^> Installing OpenAsar into Discord (closing Discord first)...
+call :Log "PRESET OpenAsar install from !_SRC!"
 taskkill /f /im Discord.exe       >nul 2>&1
 taskkill /f /im DiscordPTB.exe    >nul 2>&1
 taskkill /f /im DiscordCanary.exe >nul 2>&1
 timeout /t 2 >nul
 set "_DONE=0"
-for %%F in (Discord DiscordPTB DiscordCanary) do if exist "%LocalAppData%\%%F\" call :InstallAsarInto "%LocalAppData%\%%F" "%%F" "%_SRC%"
+for %%F in (Discord DiscordPTB DiscordCanary) do if exist "%LocalAppData%\%%F\" call :InstallAsarInto "%LocalAppData%\%%F" "%%F" "!_SRC!"
 if "%_DONE%"=="0" echo [SKIP] OpenAsar: no Discord install with a resources\app.asar found.
 if exist "%LocalAppData%\Discord\Update.exe" start "" "%LocalAppData%\Discord\Update.exe" --processStart Discord.exe
 goto :eof
