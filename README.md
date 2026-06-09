@@ -96,7 +96,7 @@ You can define your own preset as a small text file and have the script apply it
 | `performance` | `1` | Performance core (GameDVR off, game-task priorities, UI timings) |
 | `power` | `1` | Power core (Ultimate/High plan, no sleep/disk timeouts) |
 | `network` | `1` | Network core (TCP autotuning, RSS/RSC) |
-| `openasar` | `1` | Install OpenAsar silently |
+| `openasar` | `1` | Install OpenAsar **from a bundled `app.asar` only** (no download) |
 | `gamemode_off` | `1` | Disable Windows Game Mode |
 | `systemresponsiveness` | `0` | `SystemResponsiveness = 0` (favor foreground) |
 | `networkthrottling_off` | `1` | Network throttling off (`0xFFFFFFFF`) |
@@ -108,7 +108,7 @@ You can define your own preset as a small text file and have the script apply it
 | `nvme_flags` | `1` | NVMe feature flags *(may be blocked on fully-patched Windows)* |
 | `gpu_telemetry_off` | `1` | Disable GPU telemetry (NVIDIA tasks + opt-out; no-op on AMD) |
 | `nagle_off` | `1` | Disable Nagle on all interfaces (`TcpAckFrequency` / `TCPNoDelay`) |
-| `win32priority` | `42`, `26` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `26` = short variable quantum (strong foreground) `2` = Windows default |
+| `win32priority` | `42` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `2` = Windows default |
 | `dns` | `cloudflare`, `google`, or `quad9` | Set DNS on all active adapters |
 
 Keys not listed here (and `1`-keys given any value other than the one shown) are **rejected**.
@@ -205,8 +205,8 @@ Fixes in the current `PerfTweaks.cmd`:
 
 The *Apps & files → Place Unity boot.config* action no longer copies the template verbatim. It now:
 
-1. Detects physical core count (PowerShell CIM, then WMIC, then `%NUMBER_OF_PROCESSORS%`, then a manual prompt if detection fails).
-2. Sets **`job-worker-count`** and **`job-worker-maximum-count`** to **cores − 1** (min 1, max 32) before copying into the game's `*_Data` folder.
+1. Detects the **logical processor** (thread) count (PowerShell CIM, then WMIC, then `%NUMBER_OF_PROCESSORS%`, then a manual prompt if detection fails).
+2. Sets **`job-worker-count`** and **`job-worker-maximum-count`** to **logical processors − 1** (min 1, max 32) before copying into the game's `*_Data` folder.
 3. Shows the detected CPU info and chosen worker count before asking for the game path.
 
 The bundled `boot.config` values for those keys are placeholders; they are always overwritten at apply time.
@@ -232,7 +232,7 @@ If **`boot.config`** or **`hosts`** is missing or empty next to `PerfTweaks.cmd`
 
 ## "What was excluded" — the philosophy
 
-The in-app **`11. What was excluded`** screen lists, by category, the popular "tweaks" this script intentionally omits — for example security-weakening changes (disabling Defender, the firewall, UAC, or SmartScreen), placebo or obsolete registry values, firewall rules that block Google/YouTube IP ranges, hard-coded MTU values, and bulk undocumented GPU dumps. It also covers items from popular gaming guides that are deliberately skipped — Windows activation scripts, replacing Defender with a third-party antivirus, aggressive RAM / standby “cleaners”, and forcing MSI mode or NIC parameter edits (which the experienced guides themselves advise against). Read it to understand the safety rationale.
+The in-app **`10. What was excluded`** screen lists, by category, the popular "tweaks" this script intentionally omits — for example security-weakening changes (disabling Defender, the firewall, UAC, or SmartScreen), placebo or obsolete registry values, firewall rules that block Google/YouTube IP ranges, hard-coded MTU values, and bulk undocumented GPU dumps. It also covers items from popular gaming guides that are deliberately skipped — Windows activation scripts, replacing Defender with a third-party antivirus, aggressive RAM / standby “cleaners”, and forcing MSI mode or NIC parameter edits (which the experienced guides themselves advise against). Read it to understand the safety rationale.
 
 ---
 
