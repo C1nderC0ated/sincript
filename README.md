@@ -45,9 +45,9 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 - **Cleanup & repair** — Disk cleanup · SFC + DISM repair · Windows Update reset · re-register Microsoft Store · compact WinSxS.
 - **Network & DNS** — Apply TCP tweaks · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
 - **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut) · apply or remove a higher **timer resolution** (SetTimerResolution autostart) · remove built-in Store apps (**debloat**).
-- **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA / AMD aware).
+- **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA telemetry tasks + registry, or the AMD User Experience Program opt-out).
 - **Presets** — Apply a built-in **light**, **moderate**, or **heavy** preset (no per-item prompts) · apply a **custom** preset from a `.preset` file · **restore** the registry values a preset changed from one of its JSON backups.
-- **Backups & status** — Create a System Restore Point · export HKLM + HKCU · restore from a preset JSON backup · show the current state of key tweaks, the active power plan, DNS, TCP settings, the `hosts` line count, and whether OpenAsar is installed.
+- **Backups & status** — Create a System Restore Point · export HKLM + HKCU · restore from a preset JSON backup · show the current state of key tweaks, the active power plan, hibernation, minimum processor state, DNS, TCP autotuning, GPU hardware scheduling (HAGS), memory compression, the `hosts` line count, and whether OpenAsar is installed.
 
 ---
 
@@ -168,6 +168,16 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 ---
 
 ## Recent changes
+
+### AMD telemetry opt-out
+
+The **Advanced → GPU telemetry** option (and the `gpu_telemetry_off` preset key) previously did nothing on AMD systems — it only handled NVIDIA. It now also opts you out of the **AMD User Experience Program** (AMD's usage-data / telemetry collection) by writing the opt-out to the registry under `HKLM\SOFTWARE\AMD\CN`, with the previous value saved to a backup so the change stays reversible. Because AMD does not expose a single guaranteed registry switch across driver versions, the screen also points you to **AMD Software → Settings → Preferences**, where you can confirm that **AMD User Experience Program**, **AMD Image Inspector** and **Game Adjustment Tracking and Notifications** are off.
+
+### Status report expanded, and made language-independent
+
+The **Backups & status → Show current status** screen now also reports **hibernation**, **minimum processor state**, **GPU hardware scheduling (HAGS)** and **memory compression**, alongside the existing power plan, DNS, key registry tweaks, TCP autotuning, `hosts` line count and OpenAsar detection. All of these are **read-only** — the screen never changes anything.
+
+These status lines (and the DNS apply/reset actions) no longer rely on English text in Windows' command output, so they work correctly on **localized Windows, including Cyrillic (Russian)** systems. Power plan, hibernation and HAGS are read from the registry; minimum processor state reads the active power scheme's stored value; TCP autotuning uses `Get-NetTCPSetting`; and DNS is now applied to all physical adapters (active ones take effect, the rest are skipped) instead of filtering on a localized “Up” status string.
 
 ### Presets, custom presets, and JSON backups
 
