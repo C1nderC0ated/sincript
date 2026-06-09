@@ -606,7 +606,7 @@ cls
 call :Logo
 echo Reverting DNS to automatic (DHCP) on all active adapters...
 call :Log "DNS -> automatic (DHCP)"
-start "" /min /wait powershell -NoProfile -Command "Get-NetAdapter -Physical | Where-Object {$_.Status -eq 'Up'} | ForEach-Object { try { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction Stop } catch {} }"
+start "" /min /wait powershell -NoProfile -Command "Get-NetAdapter -Physical | ForEach-Object { try { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction Stop } catch {} }"
 ipconfig /flushdns >nul 2>&1
 echo [OK] DNS reset to automatic.
 pause
@@ -690,15 +690,7 @@ if not defined _gd (
     pause
     goto MenuApps
 )
-if not exist "%_gd%\" (
-    echo.
-    echo [ERROR] Folder not found:
-    echo         "%_gd%"
-    echo   Check the path and make sure you selected the game's *_Data folder.
-    call :Log "ABORT: Unity boot.config - path not found: %_gd%"
-    pause
-    goto MenuApps
-)
+if "!_gd:~-1!"=="\" set "_gd=!_gd:~0,-1!"
 set "_boottmp=%TEMP%\PerfTweaks_boot_%RANDOM%.config"
 call :PrepareBootConfig "%SCRIPT_DIR%boot.config" "!_boottmp!" "!_JWCOUNT!"
 if errorlevel 1 (
@@ -710,22 +702,38 @@ if errorlevel 1 (
     pause
     goto MenuApps
 )
-if exist "%_gd%\boot.config" copy /y "%_gd%\boot.config" "%_gd%\boot.config.bak" >nul 2>&1
-copy /y "!_boottmp!" "%_gd%\boot.config" >nul
-set "_copyerr=!errorlevel!"
-del /f /q "!_boottmp!" >nul 2>&1
-if !_copyerr! geq 1 (
+rem  Step INTO the game folder first, then copy to the bare name "boot.config". This way no
+rem  command ever receives a full path containing spaces (e.g. C:\Program Files\..), so the
+rem  space cannot be split into a stray "C:\Program" file at the drive root.
+pushd "!_gd!" 2>nul
+if errorlevel 1 (
     echo.
-    echo [ERROR] Could not copy boot.config into:
-    echo         "%_gd%"
-    echo   The folder may be read-only, on another user's profile, or locked by the game.
-    echo   Close the game, run PerfTweaks as administrator, then try again.
-    call :Log "FAIL: Unity boot.config copy to %_gd%"
-) else (
-    echo [OK] boot.config placed with job-worker-count=!_JWCOUNT! ^(!_CORESRC!^).
-    echo      Old file ^(if any^) saved as boot.config.bak
-    call :Log "OK: Unity boot.config -> %_gd% job-workers=!_JWCOUNT! (!_CORESRC!)"
+    echo [ERROR] Folder not found or not accessible:
+    echo         "!_gd!"
+    echo   Check the path and make sure you selected the game's *_Data folder.
+    call :Log "ABORT: Unity boot.config - cannot enter path"
+    if exist "!_boottmp!" del /f /q "!_boottmp!" >nul 2>&1
+    pause
+    goto MenuApps
 )
+if exist "boot.config" copy /y "boot.config" "boot.config.bak" >nul 2>&1
+copy /y "!_boottmp!" "boot.config" >nul
+set "_copyerr=!errorlevel!"
+popd
+del /f /q "!_boottmp!" >nul 2>&1
+if !_copyerr! geq 1 goto _ubCopyFail
+echo [OK] boot.config placed with job-worker-count=!_JWCOUNT! ^(!_CORESRC!^).
+echo      Old file ^(if any^) saved as boot.config.bak
+call :Log "OK: Unity boot.config -> !_gd! workers=!_JWCOUNT!"
+pause
+goto MenuApps
+:_ubCopyFail
+echo.
+echo [ERROR] Could not write boot.config into:
+echo         "!_gd!"
+echo   The folder may be read-only, or boot.config is locked by the running game.
+echo   Close the game, run PerfTweaks as administrator, then try again.
+call :Log "FAIL: Unity boot.config copy to !_gd!"
 pause
 goto MenuApps
 
@@ -1021,8 +1029,17 @@ pause
 goto MenuAdvanced
 
 :GpuAmd
-echo  Detected AMD. Bulk AMD register tweaks are not bundled (use a dedicated tool that has
-echo  its own revert if you want them). Nothing to apply here.
+echo  Detected AMD. This opts you out of the AMD User Experience Program - AMD's usage-data /
+echo  telemetry collection - by writing the opt-out to the registry, with a backup (reversible).
+echo  No bulk undocumented AMD register tweaks are applied; those can cause instability.
+set /p "_c=Apply AMD telemetry opt-out? (Y/N): "
+if /i not "%_c%"=="Y" goto MenuAdvanced
+call :SafeRegAdd "HKLM\SOFTWARE\AMD\CN" "UserExperienceProgram" REG_DWORD 0 "AMD User Experience Program opt-out"
+echo.
+echo [OK] AMD User Experience Program opt-out written.
+echo      AMD has no single guaranteed switch across driver versions, so to be sure also open
+echo      AMD Software ^> Settings ^> Preferences and turn OFF: AMD User Experience Program,
+echo      AMD Image Inspector, and Game Adjustment Tracking and Notifications.
 pause
 goto MenuAdvanced
 
@@ -1053,8 +1070,13 @@ echo   OS build %WIN_BUILD%   Win11=%IS_WIN11%   GPU=%GPU%
 echo -----------------------------------------------------------------------------------
 echo [Power plan]
 for /f "tokens=*" %%i in ('powercfg /getactivescheme') do echo   %%i
-echo [DNS - active adapters]
-start "" /min /wait powershell -NoProfile -Command "Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {$_.ServerAddresses -and (Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue).Status -eq 'Up'} | ForEach-Object { '  ' + $_.InterfaceAlias + ': ' + ($_.ServerAddresses -join ', ') } | Out-File -FilePath (Join-Path $env:TEMP 'pt_dns.txt') -Encoding ASCII"
+echo [Hibernation]  (0x0 = off, 0x1 = on)
+call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\Power" "HibernateEnabled"
+echo [Min processor state]  (this script can set 5%%)
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $g=[regex]::Match(((powercfg /getactivescheme) -join ' '),'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}').Value; $p='HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\'+$g+'\54533251-82be-4824-96c1-47b60b740d00\893dee8e-2bef-41e0-89c6-b55d0929964c'; $ac=(Get-ItemProperty -Path $p).ACSettingIndex; $dc=(Get-ItemProperty -Path $p).DCSettingIndex; if($ac -ne $null){ $s='  AC=' + $ac + '%%   DC=' + $dc + '%%' } else { $s='  (using scheme default)' }; $s | Out-File -FilePath (Join-Path $env:TEMP 'pt_mps.txt') -Encoding ASCII"
+if exist "%TEMP%\pt_mps.txt" ( type "%TEMP%\pt_mps.txt" & del "%TEMP%\pt_mps.txt" >nul 2>&1 )
+echo [DNS - adapters with DNS configured]
+start "" /min /wait powershell -NoProfile -Command "Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {$_.ServerAddresses} | ForEach-Object { '  ' + $_.InterfaceAlias + ': ' + ($_.ServerAddresses -join ', ') } | Out-File -FilePath (Join-Path $env:TEMP 'pt_dns.txt') -Encoding ASCII"
 if exist "%TEMP%\pt_dns.txt" ( type "%TEMP%\pt_dns.txt" & del "%TEMP%\pt_dns.txt" >nul 2>&1 )
 echo [Key tweaks]
 call :ShowReg "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex"
@@ -1064,10 +1086,16 @@ call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Mana
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverride"
 call :ShowReg "HKCU\System\GameConfigStore" "GameDVR_Enabled"
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" "DisabledComponents"
+echo [GPU scheduling / HAGS]  (informational - not changed by this script; 0x2 = on, 0x1 = off)
+call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode"
 echo [TCP global]
-netsh int tcp show global | findstr /I "Auto-Tuning Heuristics"
+start "" /min /wait powershell -NoProfile -Command "try{ $a=(Get-NetTCPSetting -SettingName Internet -ErrorAction Stop).AutoTuningLevelLocal; $s='  Receive Window Auto-Tuning Level: ' + $a }catch{ $s='  (could not query Get-NetTCPSetting)' }; $s | Out-File -FilePath (Join-Path $env:TEMP 'pt_tcp.txt') -Encoding ASCII"
+if exist "%TEMP%\pt_tcp.txt" ( type "%TEMP%\pt_tcp.txt" & del "%TEMP%\pt_tcp.txt" >nul 2>&1 )
 echo [CPU mitigations] FeatureSettingsOverride above: 3=disabled, 0/(not set)=on.
 echo                   Detail: PowerShell ^> Get-SpeculationControlSettings
+echo [Memory compression]  (True = on/default, False = disabled via Advanced)
+start "" /min /wait powershell -NoProfile -Command "try{ $m=Get-MMAgent; $s='  MemoryCompression=' + $m.MemoryCompression + '   PageCombining=' + $m.PageCombining }catch{ $s='  (MMAgent not available on this system)' }; $s | Out-File -FilePath (Join-Path $env:TEMP 'pt_mma.txt') -Encoding ASCII"
+if exist "%TEMP%\pt_mma.txt" ( type "%TEMP%\pt_mma.txt" & del "%TEMP%\pt_mma.txt" >nul 2>&1 )
 echo [hosts file]
 for /f %%c in ('find /c /v "" ^< "%SystemRoot%\System32\drivers\etc\hosts"') do echo   %%c lines total
 echo [OpenAsar]  (app.asar well under 1 MB = OpenAsar; ~9 MB = stock Discord)
@@ -1154,7 +1182,11 @@ echo.
 goto :eof
 
 :Log
->>"%LOGFILE%" echo [%date% %time%] %~1
+rem  Capture the message first, then echo it via DELAYED expansion. A literal ">" inside the
+rem  message (e.g. the "-> path" we log) must not be seen by the parser as a redirection - if
+rem  it were, a path like "C:\Program Files\.." would be split and create a stray "C:\Program".
+set "_LOGLN=%~1"
+>>"%LOGFILE%" echo [%date% %time%] !_LOGLN!
 goto :eof
 
 :TimerResApply
@@ -1367,19 +1399,22 @@ exit /b 0
 :Run
 rem %1 = full command line (echoed, logged, run via cmd /s /c)
 set "_cmd=%~1"
+rem  Log a quote-stripped copy of the command: with the embedded quotes gone, the whole line
+rem  is captured intact, and there is nothing the log step could misread as a redirection.
+set "_cmdlog=%_cmd:"=%"
 echo   ^> %_cmd%
-call :Log "EXEC: %_cmd%"
+call :Log "EXEC: %_cmdlog%"
 cmd /s /c "%_cmd%" 1>>"%LOGFILE%" 2>>&1
-if errorlevel 1 ( call :Log "FAIL: %_cmd%" ) else ( call :Log "OK: %_cmd%" )
+if errorlevel 1 ( call :Log "FAIL: %_cmdlog%" ) else ( call :Log "OK: %_cmdlog%" )
 goto :eof
 
 :ApplyDns
 rem %1 = friendly name ; uses %DNSSRV% as the PowerShell address list
 echo Setting %~1 DNS (IPv4 + IPv6) on all active adapters...
 call :Log "DNS -> %~1 : %DNSSRV%"
-start "" /min /wait powershell -NoProfile -Command "Get-NetAdapter -Physical | Where-Object {$_.Status -eq 'Up'} | ForEach-Object { try { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @(%DNSSRV%) -ErrorAction Stop } catch {} }"
+start "" /min /wait powershell -NoProfile -Command "Get-NetAdapter -Physical | ForEach-Object { try { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @(%DNSSRV%) -ErrorAction Stop } catch {} }"
 ipconfig /flushdns >nul 2>&1
-echo [OK] %~1 DNS applied. Verify with:  ipconfig /all ^| findstr /I "DNS Servers"
+echo [OK] %~1 DNS applied. Check it under Backups ^& status ^> Show current status.
 goto :eof
 
 :ShowReg
@@ -1643,6 +1678,7 @@ start "" /min /wait powershell -NoProfile -Command "try{Disable-MMAgent -MemoryC
 goto :eof
 
 :DoGpuTelemetryOff
+if /i "%GPU%"=="amd" call :SafeRegAdd "HKLM\SOFTWARE\AMD\CN" "UserExperienceProgram" REG_DWORD 0 "AMD User Experience Program opt-out"
 if /i not "%GPU%"=="nvidia" goto :eof
 call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport1_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
 call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport2_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
