@@ -1089,8 +1089,7 @@ call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" "Disabl
 echo [GPU scheduling / HAGS]  (informational - not changed by this script; 0x2 = on, 0x1 = off)
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode"
 echo [TCP global]
-start "" /min /wait powershell -NoProfile -Command "try{ $a=(Get-NetTCPSetting -SettingName Internet -ErrorAction Stop).AutoTuningLevelLocal; $s='  Receive Window Auto-Tuning Level: ' + $a }catch{ $s='  (could not query Get-NetTCPSetting)' }; $s | Out-File -FilePath (Join-Path $env:TEMP 'pt_tcp.txt') -Encoding ASCII"
-if exist "%TEMP%\pt_tcp.txt" ( type "%TEMP%\pt_tcp.txt" & del "%TEMP%\pt_tcp.txt" >nul 2>&1 )
+netsh int tcp show global | findstr ":"
 echo [CPU mitigations] FeatureSettingsOverride above: 3=disabled, 0/(not set)=on.
 echo                   Detail: PowerShell ^> Get-SpeculationControlSettings
 echo [Memory compression]  (True = on/default, False = disabled via Advanced)
