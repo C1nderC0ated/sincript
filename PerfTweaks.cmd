@@ -1601,6 +1601,10 @@ goto :eof
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 42 (0x2A)"
 goto :eof
 
+:DoWin32_26
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 26 (0x1A)"
+goto :eof
+
 :DoWin32_2
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 2 "Win32PrioritySeparation default (2)"
 goto :eof
@@ -1659,15 +1663,24 @@ for /f "tokens=*" %%K in ('reg query "HKLM\SYSTEM\CurrentControlSet\Services\Tcp
 goto :eof
 
 :DoOpenAsarSilent
-rem  non-interactive OpenAsar install for presets: uses the BUNDLED app.asar only
+rem  non-interactive OpenAsar install for presets
 rem  (no download prompt). For the download option, use Apps & files > Install OpenAsar.
 set "_SRC="
 if exist "%SCRIPT_DIR%app.asar" set "_SRC=%SCRIPT_DIR%app.asar"
 if not defined _SRC (
-    echo [SKIP] OpenAsar: no bundled app.asar next to the script.
-    echo        Use  Apps ^& files ^> Install OpenAsar  to download it instead.
-    call :Log "PRESET OpenAsar skipped - no bundled app.asar"
-    goto :eof
+echo OpenAsar: no bundled app.asar next to the script.
+echo Downloading OpenAsar nightly...
+start "" /min /wait powershell -NoProfile -Command "try{Invoke-WebRequest -Uri 'https://github.com/GooseMod/OpenAsar/releases/download/nightly/app.asar' -OutFile (Join-Path $env:TEMP 'openasar_nightly.asar') -UseBasicParsing}catch{exit 1}"
+set "_SRC=%TEMP%\openasar_nightly.asar"
+taskkill /f /im Discord.exe       >nul 2>&1
+taskkill /f /im DiscordPTB.exe    >nul 2>&1
+taskkill /f /im DiscordCanary.exe >nul 2>&1
+timeout /t 3 >nul
+set "_DONE=0"
+for %%F in (Discord DiscordPTB DiscordCanary) do if exist "%LocalAppData%\%%F\" call :InstallAsarInto "%LocalAppData%\%%F" "%%F" "%_SRC%"
+if "%_DONE%"=="0" echo [ERROR] No Discord install with a resources\app.asar found. ^(Store version unsupported.^)
+if exist "%LocalAppData%\Discord\Update.exe" start "" "%LocalAppData%\Discord\Update.exe" --processStart Discord.exe
+goto :eof
 )
 echo   ^> Installing OpenAsar into Discord (closing Discord first)...
 taskkill /f /im Discord.exe       >nul 2>&1
@@ -1887,6 +1900,7 @@ if defined _P_NETTHROTTLE call :DoNetThrottleOff
 if defined _P_LARGECACHE  call :DoLargeCacheOn
 if defined _P_GAMEMODE    call :DoGameModeOff
 if "%_P_WIN32%"=="42"     call :DoWin32_42
+if "%_P_WIN32%"=="26"     call :DoWin32_26
 if "%_P_WIN32%"=="2"      call :DoWin32_2
 if defined _P_MINPROC     call :SetMinProcState
 if defined _P_NAGLE       call :DoNagleOff
@@ -1951,8 +1965,9 @@ goto :eof
 
 :PChkWin32
 if "%~1"=="42" ( set "_P_WIN32=42" & set /a _pgood+=1 & goto :eof )
+if "%~1"=="26" ( set "_P_WIN32=26" & set /a _pgood+=1 & goto :eof )
 if "%~1"=="2"  ( set "_P_WIN32=2"  & set /a _pgood+=1 & goto :eof )
->>"%_perrfile%" echo   bad value "%~1" for key win32priority (use 42 or 2)
+>>"%_perrfile%" echo   bad value "%~1" for key win32priority (use 42, 26 or 2)
 set /a _perr+=1
 goto :eof
 
