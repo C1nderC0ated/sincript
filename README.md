@@ -180,7 +180,7 @@ The **Advanced → GPU telemetry** option (and the `gpu_telemetry_off` preset ke
 
 The **Backups & status → Show current status** screen now also reports **hibernation**, **minimum processor state**, **GPU hardware scheduling (HAGS)** and **memory compression**, alongside the existing power plan, DNS, key registry tweaks, TCP autotuning, `hosts` line count and OpenAsar detection. All of these are **read-only** — the screen never changes anything.
 
-These status lines (and the DNS apply/reset actions) no longer rely on English text in Windows' command output, so they work correctly on **localized Windows, including Cyrillic (Russian)** systems. Power plan, hibernation and HAGS are read from the registry; minimum processor state reads the active power scheme's stored value; TCP autotuning uses `Get-NetTCPSetting`; and DNS is now applied to all physical adapters (active ones take effect, the rest are skipped) instead of filtering on a localized “Up” status string.
+These status lines (and the DNS apply/reset actions) no longer rely on English text in Windows' command output, so they work correctly on **localized Windows, including Cyrillic (Russian)** systems. Power plan, hibernation and HAGS are read from the registry; minimum processor state reads the active power scheme's stored value; TCP global settings are read with `netsh` and filtered on the universal `:` separator (not English labels), which also avoids `Get-NetTCPSetting` failing on systems whose `MSFT_NetTCPSetting` WMI class is missing; and DNS is now applied to all physical adapters (active ones take effect, the rest are skipped) instead of filtering on a localized “Up” status string.
 
 ### Presets, custom presets, and JSON backups
 
