@@ -676,7 +676,7 @@ call :RequireBundledFile boot.config "Unity engine boot configuration"
 call :DetectUnityJobWorkers
 echo.
 echo   Detected: !_CORESRC!
-echo   Setting job-worker-count / job-worker-maximum-count to !_JWCOUNT! (reserves one core).
+echo   Setting job-worker-count / job-worker-maximum-count to !_JWCOUNT! (logical CPUs minus one).
 echo.
 echo Paste the game's *_Data folder path (or drag the folder here), then Enter:
 set "_gd="
@@ -1301,25 +1301,25 @@ pause
 goto MenuApps
 
 :DetectUnityJobWorkers
-rem Sets _JWCOUNT and _CORESRC. Physical cores - 1 when detectable; else logical - 1; else prompt.
+rem Sets _JWCOUNT and _CORESRC. Logical processors (threads) - 1 when detectable; else prompt.
 setlocal EnableDelayedExpansion
 set "_JWCOUNT="
 set "_CORESRC="
-set "_PHYS=0"
+set "_LOGI=0"
 rem  Run PowerShell in a SEPARATE minimized window (keeps this console's font intact),
-rem  write the core count to a temp file, then read it back.
-start "" /min /wait powershell -NoProfile -Command "try{$s=(Get-CimInstance Win32_Processor|Measure-Object -Property NumberOfCores -Sum).Sum;if(-not $s){$s=0}}catch{$s=0}; $s | Out-File -FilePath (Join-Path $env:TEMP 'pt_cores.txt') -Encoding ASCII"
-if exist "%TEMP%\pt_cores.txt" for /f "usebackq tokens=1 delims= " %%N in ("%TEMP%\pt_cores.txt") do set "_PHYS=%%N"
+rem  write the logical-processor (thread) count to a temp file, then read it back.
+start "" /min /wait powershell -NoProfile -Command "try{$s=(Get-CimInstance Win32_Processor|Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum;if(-not $s){$s=0}}catch{$s=0}; $s | Out-File -FilePath (Join-Path $env:TEMP 'pt_cores.txt') -Encoding ASCII"
+if exist "%TEMP%\pt_cores.txt" for /f "usebackq tokens=1 delims= " %%N in ("%TEMP%\pt_cores.txt") do set "_LOGI=%%N"
 del "%TEMP%\pt_cores.txt" >nul 2>&1
-if !_PHYS! gtr 0 (
-    set /a "_JWCOUNT=!_PHYS!-1"
-    set "_CORESRC=!_PHYS! physical cores"
+if !_LOGI! gtr 0 (
+    set /a "_JWCOUNT=!_LOGI!-1"
+    set "_CORESRC=!_LOGI! logical processors"
     goto DetectUnityJobWorkers_clamp
 )
-for /f "tokens=2 delims==" %%C in ('wmic cpu get NumberOfCores /value 2^>nul ^| findstr /I "NumberOfCores"') do set /a "_PHYS+=%%C" 2>nul
-if !_PHYS! gtr 0 (
-    set /a "_JWCOUNT=!_PHYS!-1"
-    set "_CORESRC=!_PHYS! physical cores (WMIC)"
+for /f "tokens=2 delims==" %%C in ('wmic cpu get NumberOfLogicalProcessors /value 2^>nul ^| findstr /I "NumberOfLogicalProcessors"') do set /a "_LOGI+=%%C" 2>nul
+if !_LOGI! gtr 0 (
+    set /a "_JWCOUNT=!_LOGI!-1"
+    set "_CORESRC=!_LOGI! logical processors (WMIC)"
     goto DetectUnityJobWorkers_clamp
 )
 if defined NUMBER_OF_PROCESSORS (
@@ -1331,7 +1331,7 @@ echo.
 echo [WARN] Could not detect CPU core count automatically.
 :DetectUnityJobWorkers_ask
 set "_in="
-set /p "_in=Enter job-worker count for Unity (usually cores minus 1, e.g. 7 for 8 cores): "
+set /p "_in=Enter job-worker count for Unity (usually logical CPUs minus 1, e.g. 7 for 8 threads): "
 if not defined _in goto DetectUnityJobWorkers_ask
 echo !_in!| findstr /R "^[0-9][0-9]*$" >nul || (
     echo [ERROR] Enter a whole number between 1 and 32.
@@ -1601,10 +1601,6 @@ goto :eof
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 42 (0x2A)"
 goto :eof
 
-:DoWin32_26
-call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 26 (0x1A)"
-goto :eof
-
 :DoWin32_2
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 2 "Win32PrioritySeparation default (2)"
 goto :eof
@@ -1663,24 +1659,15 @@ for /f "tokens=*" %%K in ('reg query "HKLM\SYSTEM\CurrentControlSet\Services\Tcp
 goto :eof
 
 :DoOpenAsarSilent
-rem  non-interactive OpenAsar install for presets
+rem  non-interactive OpenAsar install for presets: uses the BUNDLED app.asar only
 rem  (no download prompt). For the download option, use Apps & files > Install OpenAsar.
 set "_SRC="
 if exist "%SCRIPT_DIR%app.asar" set "_SRC=%SCRIPT_DIR%app.asar"
 if not defined _SRC (
-echo OpenAsar: no bundled app.asar next to the script.
-echo Downloading OpenAsar nightly...
-start "" /min /wait powershell -NoProfile -Command "try{Invoke-WebRequest -Uri 'https://github.com/GooseMod/OpenAsar/releases/download/nightly/app.asar' -OutFile (Join-Path $env:TEMP 'openasar_nightly.asar') -UseBasicParsing}catch{exit 1}"
-set "_SRC=%TEMP%\openasar_nightly.asar"
-taskkill /f /im Discord.exe       >nul 2>&1
-taskkill /f /im DiscordPTB.exe    >nul 2>&1
-taskkill /f /im DiscordCanary.exe >nul 2>&1
-timeout /t 3 >nul
-set "_DONE=0"
-for %%F in (Discord DiscordPTB DiscordCanary) do if exist "%LocalAppData%\%%F\" call :InstallAsarInto "%LocalAppData%\%%F" "%%F" "%_SRC%"
-if "%_DONE%"=="0" echo [ERROR] No Discord install with a resources\app.asar found. ^(Store version unsupported.^)
-if exist "%LocalAppData%\Discord\Update.exe" start "" "%LocalAppData%\Discord\Update.exe" --processStart Discord.exe
-goto :eof
+    echo [SKIP] OpenAsar: no bundled app.asar next to the script.
+    echo        Use  Apps ^& files ^> Install OpenAsar  to download it instead.
+    call :Log "PRESET OpenAsar skipped - no bundled app.asar"
+    goto :eof
 )
 echo   ^> Installing OpenAsar into Discord (closing Discord first)...
 taskkill /f /im Discord.exe       >nul 2>&1
@@ -1900,7 +1887,6 @@ if defined _P_NETTHROTTLE call :DoNetThrottleOff
 if defined _P_LARGECACHE  call :DoLargeCacheOn
 if defined _P_GAMEMODE    call :DoGameModeOff
 if "%_P_WIN32%"=="42"     call :DoWin32_42
-if "%_P_WIN32%"=="26"     call :DoWin32_26
 if "%_P_WIN32%"=="2"      call :DoWin32_2
 if defined _P_MINPROC     call :SetMinProcState
 if defined _P_NAGLE       call :DoNagleOff
@@ -1965,9 +1951,8 @@ goto :eof
 
 :PChkWin32
 if "%~1"=="42" ( set "_P_WIN32=42" & set /a _pgood+=1 & goto :eof )
-if "%~1"=="26" ( set "_P_WIN32=26" & set /a _pgood+=1 & goto :eof )
 if "%~1"=="2"  ( set "_P_WIN32=2"  & set /a _pgood+=1 & goto :eof )
->>"%_perrfile%" echo   bad value "%~1" for key win32priority (use 42, 26 or 2)
+>>"%_perrfile%" echo   bad value "%~1" for key win32priority (use 42 or 2)
 set /a _perr+=1
 goto :eof
 
