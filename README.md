@@ -58,7 +58,7 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 | Preset | What it applies | DNS |
 |--------|-----------------|-----|
 | **Light** | Cleanup core (temp/log cleanup, DNS flush), privacy/telemetry core, network core (TCP autotuning, RSS/RSC). Nothing risky. | Asks (Cloudflare / Google / Quad9 / skip) |
-| **Moderate** | The full **recommended safe set** (cleanup + privacy + performance + power + network cores) — same as menu item 9. Optionally installs OpenAsar if a bundled `app.asar` is present. | — (uses the safe set; DNS unchanged) |
+| **Moderate** | The full **recommended safe set** (cleanup + privacy + performance + power + network cores) — same as menu item 9. Optionally installs OpenAsar (uses a bundled `app.asar` if present, otherwise downloads the latest nightly). | — (uses the safe set; DNS unchanged) |
 | **Heavy** | Everything in the safe set **plus** foreground/latency tuning: `SystemResponsiveness = 0`, network throttling off, `Win32PrioritySeparation = 42`, Game Mode off, Nagle off, IPv6 off, NVMe flags, GPU telemetry off, BCD timers, memory compression off. | Asks (Cloudflare / Google / Quad9 / skip) |
 
 **Heavy deliberately does *not* include** CPU-mitigation changes, network-stack reset, system repair (SFC/DISM), debloat, `LargeSystemCache`, or the timer-resolution autostart — those stay manual under their own menus. Heavy shows a warning and offers a restore point first.
@@ -96,7 +96,7 @@ You can define your own preset as a small text file and have the script apply it
 | `performance` | `1` | Performance core (GameDVR off, game-task priorities, UI timings) |
 | `power` | `1` | Power core (Ultimate/High plan, no sleep/disk timeouts) |
 | `network` | `1` | Network core (TCP autotuning, RSS/RSC) |
-| `openasar` | `1` | Install OpenAsar **from a bundled `app.asar` only** (no download) |
+| `openasar` | `1` | Install OpenAsar silently (bundled `app.asar` if present, otherwise downloads the latest nightly) |
 | `gamemode_off` | `1` | Disable Windows Game Mode |
 | `systemresponsiveness` | `0` | `SystemResponsiveness = 0` (favor foreground) |
 | `networkthrottling_off` | `1` | Network throttling off (`0xFFFFFFFF`) |
@@ -108,7 +108,7 @@ You can define your own preset as a small text file and have the script apply it
 | `nvme_flags` | `1` | NVMe feature flags *(may be blocked on fully-patched Windows)* |
 | `gpu_telemetry_off` | `1` | Disable GPU telemetry (NVIDIA tasks + opt-out; no-op on AMD) |
 | `nagle_off` | `1` | Disable Nagle on all interfaces (`TcpAckFrequency` / `TCPNoDelay`) |
-| `win32priority` | `42` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `2` = Windows default |
+| `win32priority` | `42`, `26` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `26` = short variable quantum (strong foreground) `2` = Windows default |
 | `dns` | `cloudflare`, `google`, or `quad9` | Set DNS on all active adapters |
 
 Keys not listed here (and `1`-keys given any value other than the one shown) are **rejected**.
@@ -232,7 +232,7 @@ If **`boot.config`** or **`hosts`** is missing or empty next to `PerfTweaks.cmd`
 
 ## "What was excluded" — the philosophy
 
-The in-app **`10. What was excluded`** screen lists, by category, the popular "tweaks" this script intentionally omits — for example security-weakening changes (disabling Defender, the firewall, UAC, or SmartScreen), placebo or obsolete registry values, firewall rules that block Google/YouTube IP ranges, hard-coded MTU values, and bulk undocumented GPU dumps. It also covers items from popular gaming guides that are deliberately skipped — Windows activation scripts, replacing Defender with a third-party antivirus, aggressive RAM / standby “cleaners”, and forcing MSI mode or NIC parameter edits (which the experienced guides themselves advise against). Read it to understand the safety rationale.
+The in-app **`11. What was excluded`** screen lists, by category, the popular "tweaks" this script intentionally omits — for example security-weakening changes (disabling Defender, the firewall, UAC, or SmartScreen), placebo or obsolete registry values, firewall rules that block Google/YouTube IP ranges, hard-coded MTU values, and bulk undocumented GPU dumps. It also covers items from popular gaming guides that are deliberately skipped — Windows activation scripts, replacing Defender with a third-party antivirus, aggressive RAM / standby “cleaners”, and forcing MSI mode or NIC parameter edits (which the experienced guides themselves advise against). Read it to understand the safety rationale.
 
 ---
 
