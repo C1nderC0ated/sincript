@@ -109,7 +109,7 @@ You can define your own preset as a small text file and have the script apply it
 | `ipv6_off` | `1` | Disable IPv6 (`DisabledComponents = 0xFF`) |
 | `memcompress_off` | `1` | Disable memory compression *(raises RAM pressure on low-memory PCs)* |
 | `nvme_flags` | `1` | NVMe feature flags *(may be blocked on fully-patched Windows)* |
-| `gpu_telemetry_off` | `1` | Disable GPU telemetry (NVIDIA tasks + opt-out; no-op on AMD) |
+| `gpu_telemetry_off` | `1` | Disable GPU telemetry (NVIDIA tasks + opt-out; opt-out on AMD) |
 | `nagle_off` | `1` | Disable Nagle on all interfaces (`TcpAckFrequency` / `TCPNoDelay`) |
 | `win32priority` | `42`, `26` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `26` = short variable quantum (strong foreground) `2` = Windows default |
 | `dns` | `cloudflare`, `google`, or `quad9` | Set DNS on all active adapters |
