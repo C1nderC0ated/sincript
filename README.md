@@ -2,7 +2,6 @@
 
 <img width="178" height="97" alt="{4166AFF4-89CF-41C6-84E0-CC0A51EE1796}" src="https://github.com/user-attachments/assets/92274647-6952-4a5b-a115-0fe5c40d10f2" />
 
-
 A single, menu-driven batch script (`PerfTweaks.cmd`) that applies a **curated, reversible** set of performance, privacy, and maintenance tweaks for **Windows 10 and Windows 11**.
 
 Everything is opt-in from a menu, every registry change is backed up before it is made, and the script can create a System Restore Point and a full registry export on request. There is no silent "apply everything" — you choose what runs.
@@ -48,7 +47,7 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 - **Cleanup & repair** — Disk cleanup · SFC + DISM repair · Windows Update reset · re-register Microsoft Store · compact WinSxS.
 - **Network & DNS** — Apply TCP tweaks · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
 - **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut) · apply or remove a higher **timer resolution** (SetTimerResolution autostart) · remove built-in Store apps (**debloat**).
-- **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA telemetry tasks + registry, or the AMD User Experience Program opt-out).
+- **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA telemetry tasks + registry, or the AMD User Experience Program opt-out) · GPU hardware scheduling (HAGS) on/off.
 - **Presets** — Apply a built-in **light**, **moderate**, or **heavy** preset (no per-item prompts) · apply a **custom** preset from a `.preset` file · **restore** the registry values a preset changed from one of its JSON backups.
 - **Backups & status** — Create a System Restore Point · export HKLM + HKCU · restore from a preset JSON backup · show the current state of key tweaks, the active power plan, hibernation, minimum processor state, DNS, TCP autotuning, GPU hardware scheduling (HAGS), memory compression, the `hosts` line count, and whether OpenAsar is installed.
 
@@ -171,6 +170,10 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 ---
 
 ## Recent changes
+
+### GPU hardware scheduling (HAGS) toggle
+
+**Advanced → GPU hardware scheduling (HAGS)** is a new two-way toggle that sets `HwSchMode` in `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers` to **1 (off)** or **2 (on, the Windows default)**, with the previous value backed up so the change stays reversible. It takes effect after a reboot, needs Windows 10 2004+ and a GPU/driver that supports HAGS (older GPUs simply ignore it), and the on/off difference is usually small and system-specific — turning it off can help some capture/overlay stutter, but disables features that require it on, notably NVIDIA Frame Generation (DLSS 3). It is deliberately kept out of the auto-apply presets because it is a measure-it-yourself tradeoff rather than a guaranteed win. The status screen reflects the current value and points to this toggle.
 
 ### AMD telemetry opt-out
 
