@@ -221,6 +221,7 @@ echo     5.  Experimental NVMe driver flags
 echo     6.  Disable IPv6 (all adapters)
 echo     7.  Disable memory compression / page combining
 echo     8.  %GPU% telemetry / background tasks off
+echo     9.  GPU hardware scheduling (HAGS) on/off
 echo     0.  Back
 echo =====================================================================================
 :MenuAdvanced_ask
@@ -235,6 +236,7 @@ if "%sel%"=="5" goto NvmeFlags
 if "%sel%"=="6" goto DisableIPv6
 if "%sel%"=="7" goto MemCompress
 if "%sel%"=="8" goto GpuTelemetry
+if "%sel%"=="9" goto HagsToggle
 if "%sel%"=="0" goto MainMenu
 goto MenuAdvanced
 
@@ -1044,6 +1046,44 @@ pause
 goto MenuAdvanced
 
 rem =====================================================================================
+rem  ACTION: GPU hardware scheduling (HAGS)
+rem =====================================================================================
+:HagsToggle
+cls
+call :Logo
+echo =====================  GPU hardware scheduling (HAGS)  =============================
+echo  HwSchMode in GraphicsDrivers: 2 = on (Windows default), 1 = off. Takes effect after a
+echo  REBOOT. Needs Windows 10 2004+ and a GPU/driver that supports it - on older GPUs the
+echo  setting is simply ignored. The on/off difference is usually small and system-specific;
+echo  turning it OFF can help some capture/overlay stutter, but DISABLES features that need
+echo  it ON - notably NVIDIA Frame Generation (DLSS 3). Backed up, so it stays reversible.
+echo.
+echo     1.  Turn HAGS OFF  (HwSchMode = 1)
+echo     2.  Turn HAGS ON   (HwSchMode = 2, default)
+echo     0.  Back
+echo =====================================================================================
+:HagsToggle_ask
+set "sel="
+set /p "sel=Choose: "
+if not defined sel goto HagsToggle_ask
+if "%sel%"=="1" goto HagsOff
+if "%sel%"=="2" goto HagsOn
+if "%sel%"=="0" goto MenuAdvanced
+goto HagsToggle_ask
+
+:HagsOff
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode" REG_DWORD 1 "HAGS off"
+echo [OK] HAGS set OFF. Reboot for the change to take effect.
+pause
+goto MenuAdvanced
+
+:HagsOn
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode" REG_DWORD 2 "HAGS on (default)"
+echo [OK] HAGS set ON (default). Reboot for the change to take effect.
+pause
+goto MenuAdvanced
+
+rem =====================================================================================
 rem  ACTION: Backups & status
 rem =====================================================================================
 :DoRestorePoint
@@ -1086,7 +1126,7 @@ call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Mana
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverride"
 call :ShowReg "HKCU\System\GameConfigStore" "GameDVR_Enabled"
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" "DisabledComponents"
-echo [GPU scheduling / HAGS]  (informational - not changed by this script; 0x2 = on, 0x1 = off)
+echo [GPU scheduling / HAGS]  (0x2 = on/default, 0x1 = off; toggle under Advanced)
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode"
 echo [TCP global]
 netsh int tcp show global | findstr ":"
