@@ -31,8 +31,8 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 | # | Item | What it covers |
 |---|------|----------------|
 | 1 | Cleanup & repair | Temp/log cleanup, SFC/DISM, Windows Update reset, Store repair, WinSxS compaction |
-| 2 | Performance tweaks | GameDVR off, game-task priorities, snappier UI timings, optional Game Mode toggle |
-| 3 | Privacy & telemetry | Telemetry, ad ID, Cortana/web search, location, feedback off |
+| 2 | Performance tweaks | GameDVR off, game-task priorities, snappier UI timings, optional Game Mode / mouse-acceleration / file-extensions toggles |
+| 3 | Privacy & telemetry | Telemetry, ad ID, Cortana/web search, location, activity history, feedback off |
 | 4 | Power plan | High-performance / Ultimate plan, disable sleep & disk timeouts, optional 5% min processor state |
 | 5 | Network & DNS | TCP tuning, DNS provider switch, full network stack reset |
 | 6 | Apps & files | OpenAsar for Discord, Unity `boot.config`, custom `hosts` file, lightweight Steam launcher, Windows timer resolution |
@@ -170,6 +170,12 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 ---
 
 ## Recent changes
+
+### Reversibility fixes + a few WinUtil-style tweaks
+
+Two registry tweaks that were previously applied without a backup are now routed through the same backup path as everything else: **Nagle / delayed-ACK** disabling from the **Network** menu (it was already backed up when applied via a preset — now the menu path matches), and the optional **per-user sync services** disable in **Privacy**. Both are now captured in the `.reg` / preset-JSON backups and restore cleanly. The internal status-display helper was also hardened so a registry value containing `>` can never be misread as a redirection.
+
+Inspired by Chris Titus Tech's WinUtil, three safe, reversible items were added: **Performance** gained optional *disable mouse acceleration / Enhance pointer precision* (raw 1:1 mouse — popular for gaming; applies after sign out/in) and *show file extensions in Explorer*; and the privacy set now fully disables **Activity History** (`PublishUserActivities` / `UploadUserActivities` in addition to the activity feed). As always, these are opt-in and backed up.
 
 ### GPU hardware scheduling (HAGS) toggle
 
