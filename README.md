@@ -110,7 +110,7 @@ You can define your own preset as a small text file and have the script apply it
 | `nvme_flags` | `1` | NVMe feature flags *(may be blocked on fully-patched Windows)* |
 | `gpu_telemetry_off` | `1` | Disable GPU telemetry (NVIDIA tasks + opt-out; opt-out on AMD) |
 | `nagle_off` | `1` | Disable Nagle on all interfaces (`TcpAckFrequency` / `TCPNoDelay`) |
-| `win32priority` | `42`, `26` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `26` = short variable quantum (strong foreground) `2` = Windows default |
+| `win32priority` | `42`, `26` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `26` = short variable quantum (strong foreground), `2` = Windows default |
 | `dns` | `cloudflare`, `google`, or `quad9` | Set DNS on all active adapters |
 
 Keys not listed here (and `1`-keys given any value other than the one shown) are **rejected**.
@@ -171,71 +171,20 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 
 ## Recent changes
 
-### Reversibility fixes + a few WinUtil-style tweaks
+Newest first. Feature details live in the sections above — this is just what changed.
 
-Two registry tweaks that were previously applied without a backup are now routed through the same backup path as everything else: **Nagle / delayed-ACK** disabling from the **Network** menu (it was already backed up when applied via a preset — now the menu path matches), and the optional **per-user sync services** disable in **Privacy**. Both are now captured in the `.reg` / preset-JSON backups and restore cleanly. The internal status-display helper was also hardened so a registry value containing `>` can never be misread as a redirection.
-
-Inspired by Chris Titus Tech's WinUtil, three safe, reversible items were added: **Performance** gained optional *disable mouse acceleration / Enhance pointer precision* (raw 1:1 mouse — popular for gaming; applies after sign out/in) and *show file extensions in Explorer*; and the privacy set now fully disables **Activity History** (`PublishUserActivities` / `UploadUserActivities` in addition to the activity feed). As always, these are opt-in and backed up.
-
-### GPU hardware scheduling (HAGS) toggle
-
-**Advanced → GPU hardware scheduling (HAGS)** is a new two-way toggle that sets `HwSchMode` in `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers` to **1 (off)** or **2 (on, the Windows default)**, with the previous value backed up so the change stays reversible. It takes effect after a reboot, needs Windows 10 2004+ and a GPU/driver that supports HAGS (older GPUs simply ignore it), and the on/off difference is usually small and system-specific — turning it off can help some capture/overlay stutter, but disables features that require it on, notably NVIDIA Frame Generation (DLSS 3). It is deliberately kept out of the auto-apply presets because it is a measure-it-yourself tradeoff rather than a guaranteed win. The status screen reflects the current value and points to this toggle.
-
-### AMD telemetry opt-out
-
-The **Advanced → GPU telemetry** option (and the `gpu_telemetry_off` preset key) previously did nothing on AMD systems — it only handled NVIDIA. It now also opts you out of the **AMD User Experience Program** (AMD's usage-data / telemetry collection) by writing the opt-out to the registry under `HKLM\SOFTWARE\AMD\CN`, with the previous value saved to a backup so the change stays reversible. Because AMD does not expose a single guaranteed registry switch across driver versions, the screen also points you to **AMD Software → Settings → Preferences**, where you can confirm that **AMD User Experience Program**, **AMD Image Inspector** and **Game Adjustment Tracking and Notifications** are off.
-
-### Status report expanded, and made language-independent
-
-The **Backups & status → Show current status** screen now also reports **hibernation**, **minimum processor state**, **GPU hardware scheduling (HAGS)** and **memory compression**, alongside the existing power plan, DNS, key registry tweaks, TCP autotuning, `hosts` line count and OpenAsar detection. All of these are **read-only** — the screen never changes anything.
-
-These status lines (and the DNS apply/reset actions) no longer rely on English text in Windows' command output, so they work correctly on **localized Windows, including Cyrillic (Russian)** systems. Power plan, hibernation and HAGS are read from the registry; minimum processor state reads the active power scheme's stored value; TCP global settings are read with `netsh` and filtered on the universal `:` separator (not English labels), which also avoids `Get-NetTCPSetting` failing on systems whose `MSFT_NetTCPSetting` WMI class is missing; and DNS is now applied to all physical adapters (active ones take effect, the rest are skipped) instead of filtering on a localized “Up” status string.
-
-### Presets, custom presets, and JSON backups
-
-A new **`10. Presets`** menu applies tweaks in bundles instead of one screen at a time. Three built-in presets — **light**, **moderate**, and **heavy** — run with no per-item prompts (just a restore-point and DNS yes/no where relevant); see the *Presets* section above for exactly what each one changes and what heavy deliberately leaves out. You can also write your own **custom preset** as a `key=value` text file in a `sincript_presets\` folder (a sample `example.preset` is included) and apply it from the same menu; the script validates the file, reports any unknown keys or bad values, and asks before applying. Unlike the per-action `.reg` backups, **every registry value a preset changes is saved into a single JSON file** in `Documents\PerfTweaks_Backups`, and a new **Backups → Restore from a preset backup (JSON)** action puts those values back. (The main menu's *What was excluded* screen moved from item 10 to **item 11** to make room.)
-
-### Console-font fix for two more PowerShell calls
-
-All PowerShell in Sincript now runs in a short-lived **minimized window** so it can't disturb the main console's font or colors. Two spots that still called PowerShell inline were switched to that pattern: the **CPU core detection** used by the Unity `boot.config` action, and the **`boot.config` rewrite** step itself (its input/output paths are now passed via environment variables so spaces or quotes can't break the command, and its exit code is read back reliably).
-
-### Tweaks adopted from a community optimization guide
-
-After reviewing a widely-shared Windows 11 gaming optimization guide, a few safe, scriptable items were folded in — all opt-in and reversible. The **BCD timer** action now also sets `useplatformtick yes` to match the guide’s recommended timer combo. **Power plan** gained an optional *minimum processor state = 5%* (lets the CPU idle down to save power with no FPS loss). **Performance** gained an optional *disable Windows Game Mode* toggle (contested — some titles run smoother without it, but Microsoft says it can help, so try both). And **Apps & files** gained a *debloat* action that removes built-in Store apps in opt-in groups (standard bloat; optional apps like Camera / Snipping Tool; OneDrive) — anything removed is reinstallable from the Microsoft Store. Manual or external-tool steps from that guide (driver installs, NVIDIA control-panel values, RTSS frame caps, ISLC, third-party antivirus, activation scripts) were intentionally left out, and the *What was excluded* screen now explains why.
-
-### Timer resolution (SetTimerResolution)
-
-*Apps & files → Apply timer resolution* installs the bundled `SetTimerResolution.exe` as a hidden logon task (Task Scheduler) that raises the Windows timer resolution and holds it. You pick the resolution in 100ns units (default `5000` = 0.5 ms). On Windows 10 2004+ / 11 it also sets `GlobalTimerResolutionRequests = 1` under `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel`, so the change applies system-wide rather than only to the helper process — that part needs a **reboot**. *Remove timer resolution* deletes the task, stops the helper, removes the copied file, and can revert the registry switch.
-
-### Backup location moved to Documents
-
-Backups and logs are now created in **`Documents\PerfTweaks_Backups`** (inside your user Documents folder) instead of the drive root (`C:\PerfTweaks_Backups`). The script resolves the real Documents path from the registry, so it also works when Documents is redirected to OneDrive, and falls back to `%USERPROFILE%\Documents` if that lookup fails.
-
-### Console compatibility (Windows 10 / Server 2022)
-
-Users on Windows 10 and Windows Server 2022 reported a cluttered menu where every `echo` and `set` command was printed before its output. That happened when `@echo off` did not take effect — most often because the script was saved with a **UTF-8 BOM**, which legacy `cmd.exe` mishandles.
-
-Fixes in the current `PerfTweaks.cmd`:
-
-- File is **ASCII-only, no BOM** (safe encoding for `.cmd` on all supported Windows versions).
-- Redundant `echo off` guard at startup.
-- UAC relaunch sets **`-WorkingDirectory`** to the script folder and runs **`cd /d "%~dp0"`** so the console prompt is not stuck in `System32`.
-- **`mode`** / **`color`** errors are suppressed on narrow or restricted consoles (e.g. Server Core).
-- The header logo uses **ASCII art** instead of Unicode box-drawing characters (which break on CP437 consoles).
-
-### Unity `boot.config` — CPU-aware apply
-
-The *Apps & files → Place Unity boot.config* action no longer copies the template verbatim. It now:
-
-1. Detects the **logical processor** (thread) count (PowerShell CIM, then WMIC, then `%NUMBER_OF_PROCESSORS%`, then a manual prompt if detection fails).
-2. Sets **`job-worker-count`** and **`job-worker-maximum-count`** to **logical processors − 1** (min 1, max 32) before copying into the game's `*_Data` folder.
-3. Shows the detected CPU info and chosen worker count before asking for the game path.
-
-The bundled `boot.config` values for those keys are placeholders; they are always overwritten at apply time.
-
-### Bundled-file error handling
-
-If **`boot.config`** or **`hosts`** is missing or empty next to `PerfTweaks.cmd`, the script stops with a clear message: expected path, what the file is for, and how to fix it (copy from the Sincript package). Copy failures for Unity paths or the system `hosts` file also report actionable causes (permissions, AV tamper protection, game still running).
+- **Reversibility + WinUtil tweaks.** Nagle (Network menu) and the per-user sync-services disable (Privacy) are now backed up like everything else, and the status helper is hardened against a `>` in registry data. Added three opt-in items: disable mouse acceleration / Enhance pointer precision, show file extensions, and full **Activity History** off (`PublishUserActivities` / `UploadUserActivities`).
+- **GPU hardware scheduling (HAGS).** New Advanced two-way toggle for `HwSchMode` (on/off, reversible). Needs a reboot and Windows 10 2004+ with a supporting GPU; turning it off disables features that need it on (e.g. NVIDIA DLSS 3 Frame Generation), so it is kept out of the presets.
+- **AMD telemetry opt-out.** The GPU-telemetry action and `gpu_telemetry_off` key now also opt out of the **AMD User Experience Program** (registry, backed up), and the screen points to AMD Software → Preferences to confirm. Previously these did nothing on AMD.
+- **Status screen + localization.** The status screen adds hibernation, minimum processor state, HAGS and memory compression (all read-only). It — and the DNS apply/reset actions — no longer depend on English text in command output, so they work on localized (incl. Cyrillic) Windows: registry and cmdlet properties are read instead, TCP via `netsh` filtered on the `:` separator (which also dodges `Get-NetTCPSetting` failing where `MSFT_NetTCPSetting` is missing), and DNS is applied to all physical adapters.
+- **Presets, custom presets & JSON backups.** New **`10. Presets`** menu (light / moderate / heavy + custom `.preset` files), each writing one restorable JSON backup; *What was excluded* moved to item 11.
+- **Console-font fix.** The last two inline-PowerShell spots (Unity core detection and the `boot.config` rewrite) now use the minimized-window pattern; boot.config paths pass via environment variables.
+- **Community-guide tweaks.** BCD timers also set `useplatformtick yes`; optional minimum processor state 5%; optional Game Mode off; a *debloat* action (removed apps are reinstallable from the Store).
+- **Timer resolution.** SetTimerResolution installs as a hidden logon task plus a system-wide registry switch (needs a reboot); fully removable.
+- **Backups moved to Documents** (`Documents\PerfTweaks_Backups`, OneDrive-aware) instead of the drive root.
+- **Console compatibility (Windows 10 / Server 2022).** ASCII-only / no BOM, an echo-off guard, a working-directory fix, suppressed `mode`/`color` errors, and an ASCII logo — so `@echo off` and the menu render correctly on legacy `cmd.exe`.
+- **Unity `boot.config` is CPU-aware.** It sets `job-worker-count` / `-maximum-count` to logical processors − 1 before copying into the game's `*_Data` folder.
+- **Bundled-file error handling.** Missing/empty `boot.config` or `hosts`, and copy failures, now stop with a clear, actionable message.
 
 ---
 
