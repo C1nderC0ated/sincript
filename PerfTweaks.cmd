@@ -5,14 +5,12 @@ cd /d "%~dp0" 2>nul
 mode con: cols=100 lines=36 >nul 2>&1
 color 0D 
 title Sincript - Windows 10/11 Optimizer
-
 rem =====================================================================================
 rem  PerfTweaks - a curated, reversible Windows 10/11 optimizer with a category menu.
 rem  Every registry change is backed up first (.reg in %BACKUP_DIR%). "Backups & status"
 rem  makes a System Restore Point and a full registry export - do that first.
 rem  Read "What was excluded" in the main menu for the safety rationale.
 rem =====================================================================================
-
 rem ---------- Self-elevate to Administrator (robust, cannot loop) ----------
 rem  net session needs the 'Server' service (often disabled by debloat scripts), so fall
 rem  back to fltmc, then to reg-querying the LocalService hive (needs no service at all).
@@ -23,13 +21,14 @@ if /i "%~1"=="/elevated" goto AdminWarn
 echo Requesting Administrator privileges...
 powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs -WorkingDirectory (Split-Path -Parent '%~f0')" >nul 2>&1
 exit /b
+
 :AdminWarn
 echo [WARN] Could not auto-confirm administrator rights. Continuing anyway - some HKLM
 echo        changes may fail if this window is not actually elevated.
 timeout /t 3 >nul
+
 :AdminOK
 cd /d "%~dp0" 2>nul
-
 rem ---------- Globals ----------
 set "SCRIPT_DIR=%~dp0"
 rem  Put backups under the user's Documents folder (resolves OneDrive-redirected Documents);
@@ -40,7 +39,6 @@ call set "DOCS=%DOCS%"
 set "BACKUP_DIR=%DOCS%\PerfTweaks_Backups"
 set "LOGFILE=%BACKUP_DIR%\PerfTweaks_%RANDOM%.log"
 if not exist "%BACKUP_DIR%" md "%BACKUP_DIR%" >nul 2>&1
-
 rem ---------- OS build / Win11 / GPU detection ----------
 set "WIN_BUILD="
 for /f "tokens=3" %%B in ('reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v CurrentBuildNumber 2^>nul ^| findstr /I "CurrentBuildNumber"') do set "WIN_BUILD=%%B"
@@ -49,9 +47,7 @@ if defined WIN_BUILD if !WIN_BUILD! GEQ 22000 set "IS_WIN11=1"
 set "GPU=unknown"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" /s /v DriverDesc 2>nul | findstr /I "nvidia" >nul && set "GPU=nvidia"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" /s /v DriverDesc 2>nul | findstr /I "radeon" >nul && set "GPU=amd"
-
 call :Log "PerfTweaks start - build %WIN_BUILD% win11=%IS_WIN11% gpu=%GPU%"
-
 rem =====================================================================================
 rem  MAIN MENU
 rem =====================================================================================
@@ -75,6 +71,7 @@ echo    10.  Presets (light / moderate / heavy / custom)  + restore preset backu
 echo    11.  What was excluded (info)
 echo     0.  Exit
 echo =====================================================================================
+
 :MainMenu_ask
 set "sel="
 set /p "sel=Choose: "
@@ -102,7 +99,6 @@ echo.
 echo   Bye.
 timeout /t 2 >nul
 exit /b
-
 rem =====================================================================================
 rem  SUBMENU: Cleanup & repair
 rem =====================================================================================
@@ -117,6 +113,7 @@ echo     4.  Re-register Microsoft Store / apps
 echo     5.  Compact WinSxS (free disk space)
 echo     0.  Back
 echo =====================================================================================
+
 :MenuCleanup_ask
 set "sel="
 set /p "sel=Choose: "
@@ -128,7 +125,6 @@ if "%sel%"=="4" goto StoreRepair
 if "%sel%"=="5" goto CompactWinSxS
 if "%sel%"=="0" goto MainMenu
 goto MenuCleanup
-
 rem =====================================================================================
 rem  SUBMENU: Network & DNS
 rem =====================================================================================
@@ -141,6 +137,7 @@ echo     2.  Set DNS                 (Cloudflare / Google / Quad9 / automatic)
 echo     3.  Reset network stack     (winsock / ip / dns)
 echo     0.  Back
 echo =====================================================================================
+
 :MenuNetwork_ask
 set "sel="
 set /p "sel=Choose: "
@@ -162,6 +159,7 @@ echo     3.  Quad9        9.9.9.9 / 149.112.112.112   (blocks known-malicious do
 echo     4.  Revert to automatic (DHCP)
 echo     0.  Back
 echo =====================================================================================
+
 :MenuDns_ask
 set "sel="
 set /p "sel=Choose: "
@@ -172,7 +170,6 @@ if "%sel%"=="3" goto DnsQuad9
 if "%sel%"=="4" goto DnsAuto
 if "%sel%"=="0" goto MenuNetwork
 goto MenuDns
-
 rem =====================================================================================
 rem  SUBMENU: Apps & files
 rem =====================================================================================
@@ -190,6 +187,7 @@ echo     7.  Remove timer resolution
 echo     8.  Remove built-in apps (debloat)
 echo     0.  Back
 echo =====================================================================================
+
 :MenuApps_ask
 set "sel="
 set /p "sel=Choose: "
@@ -204,7 +202,6 @@ if "%sel%"=="7" goto TimerResRemove
 if "%sel%"=="8" goto Debloat
 if "%sel%"=="0" goto MainMenu
 goto MenuApps
-
 rem =====================================================================================
 rem  SUBMENU: Advanced
 rem =====================================================================================
@@ -224,6 +221,7 @@ echo     8.  %GPU% telemetry / background tasks off
 echo     9.  GPU hardware scheduling (HAGS) on/off
 echo     0.  Back
 echo =====================================================================================
+
 :MenuAdvanced_ask
 set "sel="
 set /p "sel=Choose: "
@@ -239,7 +237,6 @@ if "%sel%"=="8" goto GpuTelemetry
 if "%sel%"=="9" goto HagsToggle
 if "%sel%"=="0" goto MainMenu
 goto MenuAdvanced
-
 rem =====================================================================================
 rem  SUBMENU: Backups & status
 rem =====================================================================================
@@ -253,6 +250,7 @@ echo     3.  Show current status / what's applied
 echo     4.  Restore from a preset backup (JSON)
 echo     0.  Back
 echo =====================================================================================
+
 :MenuBackups_ask
 set "sel="
 set /p "sel=Choose: "
@@ -263,7 +261,6 @@ if "%sel%"=="3" goto Status
 if "%sel%"=="4" goto RestorePresetJson
 if "%sel%"=="0" goto MainMenu
 goto MenuBackups
-
 rem =====================================================================================
 rem  ACTION: Cleanup
 rem =====================================================================================
@@ -280,6 +277,7 @@ call :DoCleanupCore
 set /p "_ev=Also clear ALL Event Viewer logs? (Y/N): "
 if /i not "%_ev%"=="Y" goto _clEvDone
 for /f "tokens=*" %%G in ('wevtutil el') do call :Run "wevtutil cl ""%%G"""
+
 :_clEvDone
 echo [OK] Cleanup done.
 pause
@@ -300,7 +298,6 @@ call :Run "del /f /q ""%SystemRoot%\Panther\*"""
 call :Run "del /f /q ""%LocalAppData%\Microsoft\Windows\WebCache\*.*"""
 call :Run "ipconfig /flushdns"
 goto :eof
-
 rem =====================================================================================
 rem  ACTION: DISM + SFC
 rem =====================================================================================
@@ -318,7 +315,6 @@ call :Run "sfc /scannow"
 echo [OK] Integrity check complete.
 pause
 goto MenuCleanup
-
 rem =====================================================================================
 rem  ACTION: Reset Windows Update
 rem =====================================================================================
@@ -338,7 +334,6 @@ for %%S in (wuauserv bits cryptSvc msiserver appidsvc) do call :Run "net start %
 echo [OK] Windows Update components reset.
 pause
 goto MenuCleanup
-
 rem =====================================================================================
 rem  ACTION: Re-register Store / apps
 rem =====================================================================================
@@ -356,7 +351,6 @@ start "" /min /wait powershell -NoProfile -Command "Get-AppxPackage -AllUsers Mi
 echo [OK] Store re-registered.
 pause
 goto MenuCleanup
-
 rem =====================================================================================
 rem  ACTION: Compact WinSxS
 rem =====================================================================================
@@ -375,7 +369,6 @@ if /i "%_co%"=="Y" call :Run "compact.exe /compactos:always"
 echo [OK] Done.
 pause
 goto MenuCleanup
-
 rem =====================================================================================
 rem  ACTION: Performance
 rem =====================================================================================
@@ -390,6 +383,7 @@ echo ===========================================================================
 set /p "_c=Apply performance tweaks? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
 call :DoPerformanceCore
+set "_q1=" & set "_q2=" & set "_q3=" & set "_q3b=" & set "_q4=" & set "_q5=" & set "_q6=" & set "_q7="
 echo.
 echo Optional knobs (small / unproven gains - your call):
 set /p "_q1=  SystemResponsiveness=0 (reserve less for background)? (Y/N): "
@@ -405,6 +399,12 @@ if /i "%_q4%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Sessi
 set /p "_q5=  Disable Windows Game Mode (contested; some titles run smoother without it)? (Y/N): "
 if /i "%_q5%"=="Y" call :SafeRegAdd "HKCU\Software\Microsoft\GameBar" "AutoGameModeEnabled" REG_DWORD 0 "Game Mode off"
 if /i "%_q5%"=="Y" call :SafeRegAdd "HKCU\Software\Microsoft\GameBar" "AllowAutoGameMode" REG_DWORD 0 "Auto Game Mode off"
+set /p "_q6=  Disable mouse acceleration / Enhance pointer precision - raw 1:1 mouse, after sign out/in? (Y/N): "
+if /i "%_q6%"=="Y" call :SafeRegAdd "HKCU\Control Panel\Mouse" "MouseSpeed" REG_SZ 0 "Mouse acceleration off"
+if /i "%_q6%"=="Y" call :SafeRegAdd "HKCU\Control Panel\Mouse" "MouseThreshold1" REG_SZ 0 "Mouse accel threshold1 off"
+if /i "%_q6%"=="Y" call :SafeRegAdd "HKCU\Control Panel\Mouse" "MouseThreshold2" REG_SZ 0 "Mouse accel threshold2 off"
+set /p "_q7=  Show file extensions in Explorer (safer, see real file types)? (Y/N): "
+if /i "%_q7%"=="Y" call :SafeRegAdd "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt" REG_DWORD 0 "Show file extensions"
 echo [OK] Performance tweaks applied.
 pause
 goto MainMenu
@@ -429,7 +429,6 @@ call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\5453
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\3b04d4fd-1cc7-4f23-ab1c-d1337819c4bb" "Attributes" REG_DWORD 0 "Unhide core-parking max cores"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\ea062031-0e34-4ff1-9b6d-eb1059334028" "Attributes" REG_DWORD 0 "Unhide processor perf option"
 goto :eof
-
 rem =====================================================================================
 rem  ACTION: Privacy
 rem =====================================================================================
@@ -445,7 +444,8 @@ if /i not "%_c%"=="Y" goto MainMenu
 call :DoPrivacyCore
 set /p "_svc=Also disable per-user sync services (breaks Mail/Calendar/People sync)? (Y/N): "
 if /i not "%_svc%"=="Y" goto _privSvcDone
-for %%S in (CDPUserSvc OneSyncSvc PimIndexMaintenanceSvc UnistoreSvc UserDataSvc MessagingService) do call :Run "reg add ""HKLM\SYSTEM\CurrentControlSet\Services\%%S"" /v Start /t REG_DWORD /d 4 /f"
+for %%S in (CDPUserSvc OneSyncSvc PimIndexMaintenanceSvc UnistoreSvc UserDataSvc MessagingService) do call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\%%S" "Start" REG_DWORD 4 "Disable per-user svc %%S"
+
 :_privSvcDone
 echo [OK] Privacy tweaks applied.
 pause
@@ -469,6 +469,8 @@ call :SafeRegAdd "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" "BingSe
 call :SafeRegAdd "HKCU\Software\Microsoft\Siuf\Rules" "NumberOfSIUFInPeriod" REG_DWORD 0 "Feedback prompts off"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "DoNotShowFeedbackNotifications" REG_DWORD 1 "Feedback notifications off"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" "EnableActivityFeed" REG_DWORD 0 "Activity feed off"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" "PublishUserActivities" REG_DWORD 0 "Activity history publish off"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" "UploadUserActivities" REG_DWORD 0 "Activity history upload off"
 call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "Start_TrackProgs" REG_DWORD 0 "App-launch tracking off"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors" "DisableLocation" REG_DWORD 1 "Location off"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\OneDrive" "DisableFileSyncNGSC" REG_DWORD 1 "OneDrive auto-sync off (policy)"
@@ -482,7 +484,6 @@ call :Run "schtasks /Change /TN ""\Microsoft\Windows\Customer Experience Improve
 call :Run "schtasks /Change /TN ""\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip"" /Disable"
 call :Run "schtasks /Change /TN ""\Microsoft\Windows\Windows Error Reporting\QueueReporting"" /Disable"
 goto :eof
-
 rem =====================================================================================
 rem  ACTION: Power plan
 rem =====================================================================================
@@ -523,7 +524,6 @@ call :Run "powercfg /setacvalueindex scheme_current sub_processor PROCTHROTTLEMI
 call :Run "powercfg /setdcvalueindex scheme_current sub_processor PROCTHROTTLEMIN 5"
 call :Run "powercfg /setactive scheme_current"
 goto :eof
-
 rem =====================================================================================
 rem  ACTION: Network TCP tweaks
 rem =====================================================================================
@@ -539,11 +539,8 @@ if /i not "%_c%"=="Y" goto MenuNetwork
 call :DoNetworkCore
 set /p "_nag=Also disable Nagle/delayed-ACK on current adapters? (Y/N): "
 if /i not "%_nag%"=="Y" goto _netNagDone
-for /f "tokens=*" %%K in ('reg query "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" 2^>nul ^| findstr /R /C:"HKEY_LOCAL_MACHINE"') do (
-    call :Run "reg add ""%%K"" /v TcpAckFrequency /t REG_DWORD /d 1 /f"
-    call :Run "reg add ""%%K"" /v TCPNoDelay /t REG_DWORD /d 1 /f"
-    call :Run "reg add ""%%K"" /v TcpDelAckTicks /t REG_DWORD /d 0 /f"
-)
+call :DoNagleOff
+
 :_netNagDone
 echo [OK] TCP tweaks applied.
 pause
@@ -555,7 +552,6 @@ call :Run "netsh int tcp set heuristics disabled"
 call :Run "netsh int tcp set global rss=enabled"
 call :Run "netsh int tcp set global rsc=enabled"
 goto :eof
-
 rem =====================================================================================
 rem  ACTION: Reset network stack
 rem =====================================================================================
@@ -575,7 +571,6 @@ call :Run "ipconfig /renew"
 echo [OK] Network stack reset. Reboot recommended.
 pause
 goto MenuNetwork
-
 rem =====================================================================================
 rem  ACTION: DNS options
 rem =====================================================================================
@@ -613,7 +608,6 @@ ipconfig /flushdns >nul 2>&1
 echo [OK] DNS reset to automatic.
 pause
 goto MenuDns
-
 rem =====================================================================================
 rem  ACTION: OpenAsar
 rem =====================================================================================
@@ -636,6 +630,7 @@ echo Downloading OpenAsar nightly...
 start "" /min /wait powershell -NoProfile -Command "try{Invoke-WebRequest -Uri 'https://github.com/GooseMod/OpenAsar/releases/download/nightly/app.asar' -OutFile (Join-Path $env:TEMP 'openasar_nightly.asar') -UseBasicParsing}catch{exit 1}"
 if not exist "%TEMP%\openasar_nightly.asar" goto OA_DlFail
 set "_SRC=%TEMP%\openasar_nightly.asar"
+
 :OA_HaveSrc
 set /p "_c=Close Discord and continue? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuApps
@@ -663,7 +658,6 @@ echo [ERROR] Download failed (no internet, or GitHub is blocked here).
 echo         Put OpenAsar's app.asar next to this script and re-run (openasar.dev).
 pause
 goto MenuApps
-
 rem =====================================================================================
 rem  ACTION: Unity boot.config
 rem =====================================================================================
@@ -729,6 +723,7 @@ echo      Old file ^(if any^) saved as boot.config.bak
 call :Log "OK: Unity boot.config -> !_gd! workers=!_JWCOUNT!"
 pause
 goto MenuApps
+
 :_ubCopyFail
 echo.
 echo [ERROR] Could not write boot.config into:
@@ -738,7 +733,6 @@ echo   Close the game, run PerfTweaks as administrator, then try again.
 call :Log "FAIL: Unity boot.config copy to !_gd!"
 pause
 goto MenuApps
-
 rem =====================================================================================
 :SteamLight
 cls
@@ -785,7 +779,6 @@ echo [OK] SteamLight installed in the Steam folder, and a shortcut was placed on
 echo      First launch restarts Steam, so it may take a moment.
 pause
 goto MenuApps
-
 rem =====================================================================================
 rem  ACTION: Apply hosts
 rem =====================================================================================
@@ -820,7 +813,6 @@ if errorlevel 1 (
 )
 pause
 goto MenuApps
-
 rem =====================================================================================
 rem  ACTION: Restore / reset hosts
 rem =====================================================================================
@@ -833,6 +825,7 @@ echo     2.  Reset to a clean Windows default (un-blocks everything)
 echo     0.  Back
 echo =====================================================================================
 set "_HOSTS=%SystemRoot%\System32\drivers\etc\hosts"
+
 :RestoreHosts_ask
 set "sel="
 set /p "sel=Choose: "
@@ -871,7 +864,6 @@ echo #	::1             localhost
 if errorlevel 1 ( echo [WARN] Reset failed (AV tamper protection?). ) else ( echo [OK] hosts reset to Windows default ^(old one saved as hosts.bak^). & call :Run "ipconfig /flushdns" )
 pause
 goto MenuApps
-
 rem =====================================================================================
 rem  ACTION: Disable / enable CPU mitigations
 rem =====================================================================================
@@ -903,7 +895,6 @@ call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory M
 echo [OK] Mitigations restored to secure default. REBOOT required.
 pause
 goto MenuAdvanced
-
 rem =====================================================================================
 rem  ACTION: BCDEdit timer tweaks
 rem =====================================================================================
@@ -936,7 +927,6 @@ call :Run "bcdedit /deletevalue tscsyncpolicy"
 echo [OK] Timer settings reverted to defaults. REBOOT required.
 pause
 goto MenuAdvanced
-
 rem =====================================================================================
 rem  ACTION: NVMe flags
 rem =====================================================================================
@@ -959,7 +949,6 @@ call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManage
 echo [OK] NVMe flags written. REBOOT required.
 pause
 goto MenuAdvanced
-
 rem =====================================================================================
 rem  ACTION: Disable IPv6
 rem =====================================================================================
@@ -976,7 +965,6 @@ call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" "Dis
 echo [OK] IPv6 disabled. REBOOT required.
 pause
 goto MenuAdvanced
-
 rem =====================================================================================
 rem  ACTION: Memory compression
 rem =====================================================================================
@@ -999,7 +987,6 @@ call :Log "Done: Disable-MMAgent"
 echo [OK] Done. REBOOT recommended.
 pause
 goto MenuAdvanced
-
 rem =====================================================================================
 rem  ACTION: GPU telemetry off
 rem =====================================================================================
@@ -1044,7 +1031,6 @@ echo      AMD Software ^> Settings ^> Preferences and turn OFF: AMD User Experie
 echo      AMD Image Inspector, and Game Adjustment Tracking and Notifications.
 pause
 goto MenuAdvanced
-
 rem =====================================================================================
 rem  ACTION: GPU hardware scheduling (HAGS)
 rem =====================================================================================
@@ -1062,6 +1048,7 @@ echo     1.  Turn HAGS OFF  (HwSchMode = 1)
 echo     2.  Turn HAGS ON   (HwSchMode = 2, default)
 echo     0.  Back
 echo =====================================================================================
+
 :HagsToggle_ask
 set "sel="
 set /p "sel=Choose: "
@@ -1082,7 +1069,6 @@ call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchM
 echo [OK] HAGS set ON (default). Reboot for the change to take effect.
 pause
 goto MenuAdvanced
-
 rem =====================================================================================
 rem  ACTION: Backups & status
 rem =====================================================================================
@@ -1143,7 +1129,6 @@ if exist "%TEMP%\pt_asar.txt" ( type "%TEMP%\pt_asar.txt" & del "%TEMP%\pt_asar.
 echo =====================================================================================
 pause
 goto MenuBackups
-
 rem =====================================================================================
 rem  ACTION: Apply recommended safe set
 rem =====================================================================================
@@ -1167,7 +1152,6 @@ echo.
 echo [OK] Recommended set applied. Reboot recommended.
 pause
 goto MainMenu
-
 rem =====================================================================================
 rem  INFO: What was excluded
 rem =====================================================================================
@@ -1206,7 +1190,6 @@ echo  explicit opt-in choices (Advanced / Performance) - never in the recommende
 echo =====================================================================================
 pause
 goto MainMenu
-
 rem =====================================================================================
 rem  HELPERS
 rem =====================================================================================
@@ -1323,6 +1306,7 @@ call :Log "DEBLOAT standard set"
 echo Removing standard bloat (a minimized window may flash)...
 start "" /min /wait powershell -NoProfile -Command "$p=@('MicrosoftCorporationII.QuickAssist','Microsoft.WindowsFeedbackHub','Microsoft.Copilot','Microsoft.BingWeather','MicrosoftCorporationII.MicrosoftFamily','Microsoft.MicrosoftOfficeHub','Microsoft.BingSearch','Clipchamp.Clipchamp','MSTeams','Microsoft.Todos','Microsoft.MicrosoftStickyNotes','Microsoft.BingNews','Microsoft.OutlookForWindows','Microsoft.WindowsAlarms','Microsoft.MicrosoftSolitaireCollection'); foreach($x in $p){Get-AppxPackage -AllUsers $x | Remove-AppxPackage -ErrorAction SilentlyContinue}"
 echo [OK] Standard bloat removed where present.
+
 :DebloatOpt
 echo.
 set "_c2="
@@ -1332,6 +1316,7 @@ call :Log "DEBLOAT optional apps"
 echo Removing optional apps (a minimized window may flash)...
 start "" /min /wait powershell -NoProfile -Command "$p=@('Microsoft.WindowsCamera','Microsoft.WindowsSoundRecorder','Microsoft.ScreenSketch','Microsoft.PowerAutomateDesktop','Microsoft.Xbox.TCUI','Microsoft.GamingApp'); foreach($x in $p){Get-AppxPackage -AllUsers $x | Remove-AppxPackage -ErrorAction SilentlyContinue}"
 echo [OK] Optional apps removed where present.
+
 :DebloatOneDrive
 echo.
 set "_c4="
@@ -1341,6 +1326,7 @@ call :Log "DEBLOAT OneDrive"
 echo Removing OneDrive (a minimized window may flash)...
 start "" /min /wait powershell -NoProfile -Command "Get-AppxPackage -AllUsers Microsoft.OneDriveSync | Remove-AppxPackage -ErrorAction SilentlyContinue; Start-Process -FilePath ($env:SystemRoot + '\System32\OneDriveSetup.exe') -ArgumentList '/uninstall' -NoNewWindow -Wait -ErrorAction SilentlyContinue"
 echo [OK] OneDrive removed.
+
 :DebloatDone
 echo.
 echo Done. Any removed app can be reinstalled later from the Microsoft Store.
@@ -1400,6 +1386,7 @@ if defined NUMBER_OF_PROCESSORS (
 )
 echo.
 echo [WARN] Could not detect CPU core count automatically.
+
 :DetectUnityJobWorkers_ask
 set "_in="
 set /p "_in=Enter job-worker count for Unity (usually logical CPUs minus 1, e.g. 7 for 8 threads): "
@@ -1459,8 +1446,10 @@ goto :eof
 :ShowReg
 rem %1 = key ; %2 = value name ; prints "value = data" or "(not set)"
 set "_found="
-for /f "tokens=2,*" %%a in ('reg query "%~1" /v "%~2" 2^>nul ^| findstr /I /C:"%~2"') do (echo   %~2 = %%b & set "_found=1")
+set "_srd="
+for /f "tokens=2,*" %%a in ('reg query "%~1" /v "%~2" 2^>nul ^| findstr /I /C:"%~2"') do (set "_srd=%%b" & set "_found=1")
 if not defined _found echo   %~2 = (not set)
+if defined _found echo   %~2 = !_srd!
 goto :eof
 
 :SafeRegAdd
@@ -1494,9 +1483,11 @@ set "_rk=!_rk:HKCC\=HKEY_CURRENT_CONFIG\!"
 >>"!_bkp!" echo [!_rk!]
 call :BackupValueLine
 goto _sraApply
+
 :_sraJson
 rem  ----- preset mode: append this value's prior state to the JSON backup -----
 call :BackupValueJson
+
 :_sraApply
 call :Log "REGADD !_key! !_val!=!_data! (!_desc!)"
 reg add "!_key!" /v "!_val!" /t !_type! /d "!_data!" /f >nul 2>&1
@@ -1570,7 +1561,6 @@ if errorlevel 1 (
 )
 endlocal
 goto :eof
-
 rem =====================================================================================
 rem  PRESETS  -  auto-apply groups of tweaks; registry changes saved to ONE JSON backup
 rem =====================================================================================
@@ -1589,6 +1579,7 @@ echo     4.  Custom    (load a user preset from the sincript_presets folder)
 echo     5.  Restore from a preset backup (JSON)
 echo     0.  Back
 echo =====================================================================================
+
 :MenuPresets_ask
 set "sel="
 set /p "sel=Choose: "
@@ -1600,7 +1591,6 @@ if "%sel%"=="4" goto PresetCustom
 if "%sel%"=="5" goto RestorePresetJson
 if "%sel%"=="0" goto MainMenu
 goto MenuPresets
-
 rem ---------- preset capture helpers ----------
 :PresetBegin
 rem %1 = preset label used in the backup filename
@@ -1641,14 +1631,17 @@ if "%_dc%"=="2" goto _pdnsgg
 if "%_dc%"=="3" goto _pdnsq9
 echo  Leaving DNS unchanged.
 goto :eof
+
 :_pdnscf
 set "DNSSRV='1.1.1.1','1.0.0.1','2606:4700:4700::1111','2606:4700:4700::1001'"
 call :ApplyDns "Cloudflare"
 goto :eof
+
 :_pdnsgg
 set "DNSSRV='8.8.8.8','8.8.4.4','2001:4860:4860::8888','2001:4860:4860::8844'"
 call :ApplyDns "Google"
 goto :eof
+
 :_pdnsq9
 set "DNSSRV='9.9.9.9','149.112.112.112','2620:fe::fe','2620:fe::9'"
 call :ApplyDns "Quad9"
@@ -1661,7 +1654,6 @@ if /i "%~1"=="google"     set "DNSSRV='8.8.8.8','8.8.4.4','2001:4860:4860::8888'
 if /i "%~1"=="quad9"      set "DNSSRV='9.9.9.9','149.112.112.112','2620:fe::fe','2620:fe::9'"
 call :ApplyDns "%~1"
 goto :eof
-
 rem ---------- returnable tweak wrappers (reused by heavy + custom presets) ----------
 :DoSysResp0
 call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" REG_DWORD 0 "SystemResponsiveness 0"
@@ -1756,6 +1748,7 @@ if not exist "%PT_OA%" (
 )
 set "_SRC=%PT_OA%"
 set "PT_OA="
+
 :_oasInstall
 echo   ^> Installing OpenAsar into Discord (closing Discord first)...
 call :Log "PRESET OpenAsar install from !_SRC!"
@@ -1768,7 +1761,6 @@ for %%F in (Discord DiscordPTB DiscordCanary) do if exist "%LocalAppData%\%%F\" 
 if "%_DONE%"=="0" echo [SKIP] OpenAsar: no Discord install with a resources\app.asar found.
 if exist "%LocalAppData%\Discord\Update.exe" start "" "%LocalAppData%\Discord\Update.exe" --processStart Discord.exe
 goto :eof
-
 rem =====================================================================================
 rem  PRESET: LIGHT
 rem =====================================================================================
@@ -1794,7 +1786,6 @@ echo      %PRESET_LAST%
 echo      Reboot recommended.
 pause
 goto MenuPresets
-
 rem =====================================================================================
 rem  PRESET: MODERATE  (the recommended safe set + power + OpenAsar)
 rem =====================================================================================
@@ -1830,7 +1821,6 @@ echo.
 echo Reboot recommended.
 pause
 goto MenuPresets
-
 rem =====================================================================================
 rem  PRESET: HEAVY  (aggressive but reversible; no mitigations / repair / reset / debloat)
 rem =====================================================================================
@@ -1879,7 +1869,6 @@ echo  Tip: to also enable a higher timer resolution, use  Apps ^& files ^> Apply
 echo       resolution  (it needs the bundled SetTimerResolution.exe).
 pause
 goto MenuPresets
-
 rem =====================================================================================
 rem  PRESET: CUSTOM  (load a key=value file from sincript_presets\)
 rem =====================================================================================
@@ -1916,6 +1905,7 @@ echo  Available preset files in sincript_presets\:
 for /l %%I in (1,1,%_pn%) do echo     %%I.  !_pnm[%%I]!
 echo     0.  Back
 echo =====================================================================================
+
 :PresetCustom_ask
 set "sel="
 set /p "sel=Choose a preset file: "
@@ -1929,7 +1919,6 @@ for /l %%I in (1,1,%_pn%) do if "%sel%"=="%%I" set "_pshow=!_pnm[%%I]!"
 set "_pbase="
 for %%F in ("%_pfile%") do set "_pbase=%%~nF"
 set "_pbase=%_pbase: =_%"
-
 rem ---- validate: read each key=value once, record valid directives, collect problems ----
 set "_perr=0"
 set "_pgood=0"
@@ -1937,7 +1926,6 @@ set "_perrfile=%TEMP%\sincript_preset_err_%RANDOM%.txt"
 break>"%_perrfile%"
 for %%K in (CLEANUP PRIVACY PERFORMANCE POWER NETWORK OPENASAR GAMEMODE SYSRESP NETTHROTTLE LARGECACHE MINPROC BCDTIMERS IPV6 MEMCOMPRESS NVME GPUTEL NAGLE WIN32 DNS) do set "_P_%%K="
 for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%_pfile%") do call :PresetCheckLine "%%A" "%%B"
-
 cls
 call :Logo
 echo ===============================  CUSTOM PRESET  ===================================
@@ -1955,16 +1943,17 @@ echo [ABORT] No valid directives found - nothing to apply.
 echo         Check the file against the key list in the README.
 pause
 goto MenuPresets
+
 :_pcHaveValid
 if %_perr% lss 1 goto _pcReady
 set "_cc="
 set /p "_cc=Apply the valid directives and skip the problems? (Y/N): "
 if /i not "%_cc%"=="Y" goto MenuPresets
+
 :_pcReady
 set "_rp="
 set /p "_rp=Create a System Restore Point first? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
-
 call :PresetBegin custom_%_pbase%
 if defined _P_CLEANUP     call :DoCleanupCore
 if defined _P_PRIVACY     call :DoPrivacyCore
@@ -2054,7 +2043,6 @@ if /i "%~1"=="quad9"      ( set "_P_DNS=quad9"      & set /a _pgood+=1 & goto :e
 >>"%_perrfile%" echo   bad value "%~1" for key dns (use cloudflare, google or quad9)
 set /a _perr+=1
 goto :eof
-
 rem =====================================================================================
 rem  RESTORE from a preset JSON backup (registry values only)
 rem =====================================================================================
@@ -2082,6 +2070,7 @@ echo  Preset backups (newest first):
 for /l %%I in (1,1,%_rn%) do echo     %%I.  !_rnm[%%I]!
 echo     0.  Back
 echo =====================================================================================
+
 :RestorePresetJson_ask
 set "sel="
 set /p "sel=Choose a backup to restore: "
@@ -2105,7 +2094,6 @@ echo [OK] Restore finished (registry values). A reboot is recommended.
 echo      Reminder: revert DNS, power plan and BCD timers from their own menu items if needed.
 pause
 goto MenuBackups
-
 rem =====================================================================================
 rem  JSON value backup (called by SafeRegAdd when a preset is being applied)
 rem =====================================================================================
@@ -2121,12 +2109,15 @@ if /i "!_rt!"=="REG_DWORD" goto _bvjDword
 if /i "!_rt!"=="REG_SZ" goto _bvjSz
 >>"!PRESET_JSON_TMP!" echo {"key":"!_jk!","name":"!_jv!","present":true,"oldtype":"!_rt!","restorable":false}
 goto :eof
+
 :_bvjAbsent
 >>"!PRESET_JSON_TMP!" echo {"key":"!_jk!","name":"!_jv!","present":false}
 goto :eof
+
 :_bvjDword
 >>"!PRESET_JSON_TMP!" echo {"key":"!_jk!","name":"!_jv!","present":true,"oldtype":"REG_DWORD","olddata":"!_rd!"}
 goto :eof
+
 :_bvjSz
 set _sz=!_rd:"=!
 set "_sz=!_sz:\=\\!"
