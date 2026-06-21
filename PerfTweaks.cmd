@@ -219,6 +219,7 @@ echo     6.  Disable IPv6 (all adapters)
 echo     7.  Disable memory compression / page combining
 echo     8.  %GPU% telemetry / background tasks off
 echo     9.  GPU hardware scheduling (HAGS) on/off
+echo    10.  Set permanent process priority  (per .exe, e.g. a game)
 echo     0.  Back
 echo =====================================================================================
 
@@ -235,6 +236,7 @@ if "%sel%"=="6" goto DisableIPv6
 if "%sel%"=="7" goto MemCompress
 if "%sel%"=="8" goto GpuTelemetry
 if "%sel%"=="9" goto HagsToggle
+if "%sel%"=="10" goto ProcPriority
 if "%sel%"=="0" goto MainMenu
 goto MenuAdvanced
 rem =====================================================================================
@@ -1069,6 +1071,59 @@ call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchM
 echo [OK] HAGS set ON (default). Reboot for the change to take effect.
 pause
 goto MenuAdvanced
+
+:ProcPriority
+cls
+call :Logo
+echo =====================  PERMANENT PROCESS PRIORITY (per .exe)  ======================
+echo  Pins a CPU priority that Windows re-applies every time that program starts, via
+echo  Image File Execution Options (CpuPriorityClass). Backed up, so it stays reversible.
+echo  Use the .exe that ACTUALLY runs (Task Manager -^> Details tab), not a launcher -
+echo  High / Above-normal do NOT pass down to child processes. Realtime is not offered
+echo  (it can starve Windows and freeze the machine).
+echo =====================================================================================
+set "_exe="
+set /p "_exe=.exe name (e.g. game.exe), blank = cancel: "
+if not defined _exe goto MenuAdvanced
+set _exe=!_exe:"=!
+if not defined _exe goto MenuAdvanced
+for %%I in ("!_exe!") do set "_exe=%%~nxI"
+if not defined _exe goto MenuAdvanced
+if /i not "!_exe:~-4!"==".exe" set "_exe=!_exe!.exe"
+if /i "!_exe!"==".exe" (echo   Please enter a real .exe name. & pause & goto MenuAdvanced)
+echo.
+echo  Priority for !_exe!:
+echo     1.  High            (demanding games; use sparingly)
+echo     2.  Above normal    (a gentler boost than High)
+echo     3.  Normal          (Windows default)
+echo     4.  Below normal
+echo     5.  Low / Idle      (background apps you want out of the way)
+echo     6.  Remove override (delete the setting -^> back to default)
+echo     0.  Cancel
+set "_plv="
+set "_pln="
+set "_pl="
+set /p "_pl=Choose: "
+if "!_pl!"=="0" goto MenuAdvanced
+if "!_pl!"=="6" goto _ppRemove
+if "!_pl!"=="1" (set "_plv=3" & set "_pln=High")
+if "!_pl!"=="2" (set "_plv=6" & set "_pln=Above normal")
+if "!_pl!"=="3" (set "_plv=2" & set "_pln=Normal")
+if "!_pl!"=="4" (set "_plv=5" & set "_pln=Below normal")
+if "!_pl!"=="5" (set "_plv=1" & set "_pln=Low/Idle")
+if not defined _plv goto MenuAdvanced
+call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\!_exe!\PerfOptions" "CpuPriorityClass" REG_DWORD !_plv! "Priority !_pln! for !_exe!"
+echo.
+echo [OK] !_exe! priority set to !_pln!. Close and reopen the program for it to take effect.
+pause
+goto MenuAdvanced
+
+:_ppRemove
+call :SafeRegDelete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\!_exe!\PerfOptions" "CpuPriorityClass" "Remove priority override for !_exe!"
+echo.
+echo [OK] Priority override for !_exe! removed (back to Windows default).
+pause
+goto MenuAdvanced
 rem =====================================================================================
 rem  ACTION: Backups & status
 rem =====================================================================================
@@ -1492,6 +1547,43 @@ call :BackupValueJson
 call :Log "REGADD !_key! !_val!=!_data! (!_desc!)"
 reg add "!_key!" /v "!_val!" /t !_type! /d "!_data!" /f >nul 2>&1
 if errorlevel 1 ( call :Log "  FAIL regadd !_key! !_val!" ) else ( call :Log "  OK regadd !_key! !_val!" )
+endlocal
+goto :eof
+
+:SafeRegDelete
+rem %1=Key %2=Value %3=Description. Backs up the single value (same as SafeRegAdd), then deletes it.
+setlocal EnableDelayedExpansion
+set "_key=%~1"
+set "_val=%~2"
+set "_desc=%~3"
+echo   [REG] !_desc!
+set "_ln="
+for /f "delims=" %%L in ('reg query "!_key!" /v "!_val!" 2^>nul ^| findstr /I /C:"REG_"') do set "_ln=%%L"
+if not defined _ln ( call :Log "REGDEL !_key! !_val! (already absent)" & endlocal & goto :eof )
+if defined PRESET_MODE goto _srdJson
+set "_safe=!_key:\=_!"
+set "_safe=!_safe::=!"
+set "_safe=!_safe: =_!"
+set "_bkp=%BACKUP_DIR%\!_safe!_%RANDOM%.reg"
+set "_rk=!_key!"
+set "_rk=!_rk:HKLM\=HKEY_LOCAL_MACHINE\!"
+set "_rk=!_rk:HKCU\=HKEY_CURRENT_USER\!"
+set "_rk=!_rk:HKCR\=HKEY_CLASSES_ROOT\!"
+set "_rk=!_rk:HKU\=HKEY_USERS\!"
+set "_rk=!_rk:HKCC\=HKEY_CURRENT_CONFIG\!"
+> "!_bkp!" echo Windows Registry Editor Version 5.00
+>>"!_bkp!" echo.
+>>"!_bkp!" echo [!_rk!]
+call :BackupValueLine
+goto _srdApply
+
+:_srdJson
+call :BackupValueJson
+
+:_srdApply
+call :Log "REGDEL !_key! !_val! (!_desc!)"
+reg delete "!_key!" /v "!_val!" /f >nul 2>&1
+if errorlevel 1 ( call :Log "  FAIL regdel !_key! !_val!" ) else ( call :Log "  OK regdel !_key! !_val!" )
 endlocal
 goto :eof
 
