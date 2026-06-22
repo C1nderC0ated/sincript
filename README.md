@@ -37,7 +37,7 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 | 5 | Network & DNS | TCP tuning, DNS provider switch, full network stack reset |
 | 6 | Apps & files | OpenAsar for Discord, Unity `boot.config`, custom `hosts` file, lightweight Steam launcher, Windows timer resolution |
 | 7 | Advanced | At-your-own-risk items: CPU mitigations, boot timers, NVMe flags, IPv6, memory compression, GPU telemetry |
-| 8 | Backups & status | Restore point, full registry export, current-status report |
+| 8 | Backups & status | Restore point, full registry export, current-status report, single-value `.reg` restore |
 | 9 | Apply recommended safe set | One-click core tweaks from categories 1–5 (no prompts) |
 | 10 | Presets | Auto-apply **light / moderate / heavy** preset, build your own **custom** preset, or restore a preset's JSON backup |
 | 11 | What was excluded | Explains what the script deliberately leaves out, and why |
@@ -49,7 +49,7 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 - **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut) · apply or remove a higher **timer resolution** (SetTimerResolution autostart) · remove built-in Store apps (**debloat**).
 - **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA telemetry tasks + registry, or the AMD User Experience Program opt-out) · GPU hardware scheduling (HAGS) on/off · set a permanent per-program CPU priority (per `.exe`, via Image File Execution Options).
 - **Presets** — Apply a built-in **light**, **moderate**, or **heavy** preset (no per-item prompts) · apply a **custom** preset from a `.preset` file · **restore** the registry values a preset changed from one of its JSON backups.
-- **Backups & status** — Create a System Restore Point · export HKLM + HKCU · restore from a preset JSON backup · show the current state of key tweaks, the active power plan, hibernation, minimum processor state, DNS, TCP autotuning, GPU hardware scheduling (HAGS), memory compression, the `hosts` line count, and whether OpenAsar is installed.
+- **Backups & status** — Create a System Restore Point · export HKLM + HKCU · restore from a preset JSON backup · restore a single value backup (`.reg`) · show the current state of key tweaks, the active power plan, hibernation, minimum processor state, DNS, TCP autotuning, GPU hardware scheduling (HAGS), memory compression, the `hosts` line count, and whether OpenAsar is installed.
 
 ---
 
@@ -141,7 +141,7 @@ All backups and logs live in **`Documents\PerfTweaks_Backups`** — a `PerfTweak
 
 | Change | How to undo |
 |--------|-------------|
-| Any single registry tweak | Double-click its `.reg` backup in `Documents\PerfTweaks_Backups` |
+| Any single registry tweak | Double-click its `.reg` backup in `Documents\PerfTweaks_Backups`, or use Backups & status → **Restore a single value backup (.reg)** |
 | CPU mitigations | Advanced → **Enable mitigations** |
 | Boot (BCD) timers | Advanced → **Revert BCD timers** |
 | DNS | Network → DNS → **Automatic (DHCP)** |
@@ -173,6 +173,7 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 
 Newest first. Feature details live in the sections above — this is just what changed.
 
+- **In-app single-value restore (Backups & status).** New *Restore a single value backup (.reg)* item lists the small per-value `.reg` backups the script writes before each registry tweak (newest first) and re-imports the one you pick — logged, and reversing a single manual change no longer means leaving the tool to double-click in Explorer. It reads the same backups as before; full-registry exports (`FullReg_*.reg`) are filtered out of the list and stay a manual import. The companion *Restore from a preset backup (JSON)* item (for preset changes) is unchanged.
 - **Per-app CPU priority (Advanced).** New *Set permanent process priority* item pins a per-`.exe` priority (High / Above normal / Normal / Below normal / Low) via Image File Execution Options (`CpuPriorityClass`), which Windows re-applies on every launch — backed up and reversible, with a *Remove override* option. Target the .exe that actually runs (Task Manager → Details), since High / Above-normal don't pass to child processes; Realtime is intentionally not offered.
 - **Reversibility + WinUtil tweaks.** Nagle (Network menu) and the per-user sync-services disable (Privacy) are now backed up like everything else, and the status helper is hardened against a `>` in registry data. Added three opt-in items: disable mouse acceleration / Enhance pointer precision, show file extensions, and full **Activity History** off (`PublishUserActivities` / `UploadUserActivities`).
 - **GPU hardware scheduling (HAGS).** New Advanced two-way toggle for `HwSchMode` (on/off, reversible). Needs a reboot and Windows 10 2004+ with a supporting GPU; turning it off disables features that need it on (e.g. NVIDIA DLSS 3 Frame Generation), so it is kept out of the presets.
