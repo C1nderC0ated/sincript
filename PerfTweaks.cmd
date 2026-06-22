@@ -250,6 +250,7 @@ echo     1.  Create System Restore Point
 echo     2.  Full registry backup (HKLM + HKCU export)
 echo     3.  Show current status / what's applied
 echo     4.  Restore from a preset backup (JSON)
+echo     5.  Restore a single value backup (.reg)
 echo     0.  Back
 echo =====================================================================================
 
@@ -261,6 +262,7 @@ if "%sel%"=="1" goto DoRestorePoint
 if "%sel%"=="2" goto DoRegBackup
 if "%sel%"=="3" goto Status
 if "%sel%"=="4" goto RestorePresetJson
+if "%sel%"=="5" goto RestoreRegBackup
 if "%sel%"=="0" goto MainMenu
 goto MenuBackups
 rem =====================================================================================
@@ -1085,7 +1087,7 @@ echo ===========================================================================
 set "_exe="
 set /p "_exe=.exe name (e.g. game.exe), blank = cancel: "
 if not defined _exe goto MenuAdvanced
-set _exe=!_exe:"=!
+set "_exe=!_exe:"=!"
 if not defined _exe goto MenuAdvanced
 for %%I in ("!_exe!") do set "_exe=%%~nxI"
 if not defined _exe goto MenuAdvanced
@@ -2187,6 +2189,66 @@ echo      Reminder: revert DNS, power plan and BCD timers from their own menu it
 pause
 goto MenuBackups
 rem =====================================================================================
+rem  RESTORE a single per-value .reg backup (re-import one of the tiny tweak backups)
+rem =====================================================================================
+:RestoreRegBackup
+cls
+call :Logo
+echo ====================  Restore a single value backup (.reg)  =======================
+echo  Re-imports one of the small per-value .reg backups this script writes before each
+echo  registry tweak - the same files you can also double-click in the backup folder.
+echo  Full-registry exports (FullReg_*.reg) are not listed here; import those manually.
+echo =====================================================================================
+set "_qn=0"
+for /f "delims=" %%F in ('dir /b /a-d /o-d "%BACKUP_DIR%\*.reg" 2^>nul ^| findstr /I /V /B "FullReg_"') do (
+    set /a _qn+=1
+    set "_qf[!_qn!]=%BACKUP_DIR%\%%F"
+    set "_qnm[!_qn!]=%%F"
+)
+if "%_qn%"=="0" (
+    echo  No per-value .reg backups were found in:
+    echo     %BACKUP_DIR%
+    echo.
+    pause
+    goto MenuBackups
+)
+echo  Value backups (newest first):
+for /l %%I in (1,1,%_qn%) do echo     %%I.  !_qnm[%%I]!
+echo     0.  Back
+echo =====================================================================================
+
+:RestoreRegBackup_ask
+set "sel="
+set /p "sel=Choose a backup to restore: "
+if not defined sel goto RestoreRegBackup_ask
+if "%sel%"=="0" goto MenuBackups
+set "_qfile="
+set "_qshow="
+for /l %%I in (1,1,%_qn%) do if "%sel%"=="%%I" set "_qfile=!_qf[%%I]!"
+for /l %%I in (1,1,%_qn%) do if "%sel%"=="%%I" set "_qshow=!_qnm[%%I]!"
+if not defined _qfile goto RestoreRegBackup_ask
+echo.
+echo  This backup will put the following value(s) back to their saved state:
+echo -----------------------------------------------------------------------------------
+type "%_qfile%"
+echo -----------------------------------------------------------------------------------
+echo  A line like  "Name"=-  means the value did not exist before and will be removed.
+set "_cc="
+set /p "_cc=Import this .reg backup now? (Y/N): "
+if /i not "%_cc%"=="Y" goto MenuBackups
+echo   ^> Importing "%_qshow%"...
+call :Log "REG restore (import) from %_qshow%"
+reg import "%_qfile%" 1>>"%LOGFILE%" 2>>&1
+if errorlevel 1 (
+    echo [WARN] Import reported an error - check the log for details.
+    call :Log "  FAIL reg import %_qshow%"
+) else (
+    echo [OK] Backup imported. A sign out/in or reboot may be needed for some values.
+    call :Log "  OK reg import %_qshow%"
+)
+pause
+goto MenuBackups
+rem =====================================================================================
 rem  JSON value backup (called by SafeRegAdd when a preset is being applied)
 rem =====================================================================================
 :BackupValueJson
@@ -2211,7 +2273,7 @@ goto :eof
 goto :eof
 
 :_bvjSz
-set _sz=!_rd:"=!
+set "_sz=!_rd:"=!"
 set "_sz=!_sz:\=\\!"
 >>"!PRESET_JSON_TMP!" echo {"key":"!_jk!","name":"!_jv!","present":true,"oldtype":"REG_SZ","olddata":"!_sz!"}
 goto :eof
