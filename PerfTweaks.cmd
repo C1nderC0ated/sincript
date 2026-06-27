@@ -251,6 +251,7 @@ echo     2.  Full registry backup (HKLM + HKCU export)
 echo     3.  Show current status / what's applied
 echo     4.  Restore from a preset backup (JSON)
 echo     5.  Restore a single value backup (.reg)
+echo     6.  Manage / open backup folder
 echo     0.  Back
 echo =====================================================================================
 
@@ -263,6 +264,7 @@ if "%sel%"=="2" goto DoRegBackup
 if "%sel%"=="3" goto Status
 if "%sel%"=="4" goto RestorePresetJson
 if "%sel%"=="5" goto RestoreRegBackup
+if "%sel%"=="6" goto ManageBackups
 if "%sel%"=="0" goto MainMenu
 goto MenuBackups
 rem =====================================================================================
@@ -2248,6 +2250,72 @@ if errorlevel 1 (
 )
 pause
 goto MenuBackups
+rem =====================================================================================
+rem  MANAGE / open the backup folder (summary, open in Explorer, prune old full exports)
+rem =====================================================================================
+:ManageBackups
+cls
+call :Logo
+echo ==========================  Manage backup folder  ================================
+echo  Everything this script backs up lives in one folder. The small per-value .reg files
+echo  and preset .json files are the precise undo data and are left untouched here; only
+echo  the large full-registry exports - which pile up each time you run a full registry
+echo  backup - can be pruned, and even then the newest pair is always kept.
+echo =====================================================================================
+set "_cntAllReg=0"
+for %%Z in ("!BACKUP_DIR!\*.reg") do set /a _cntAllReg+=1
+set "_cntFull=0" & set "_mbFull=0"
+for %%Z in ("!BACKUP_DIR!\FullReg_*.reg") do call :_mbAddFull "%%~zZ"
+set /a _cntVal=_cntAllReg-_cntFull
+if !_cntVal! lss 0 set "_cntVal=0"
+set "_cntJson=0"
+for %%Z in ("!BACKUP_DIR!\Preset_*.json") do set /a _cntJson+=1
+set "_cntHosts=0"
+for %%Z in ("!BACKUP_DIR!\hosts_*.bak") do set /a _cntHosts+=1
+set "_cntLog=0"
+for %%Z in ("!BACKUP_DIR!\PerfTweaks_*.log") do set /a _cntLog+=1
+echo  Folder:  !BACKUP_DIR!
+echo  Log now: !LOGFILE!
+echo -----------------------------------------------------------------------------------
+echo   Per-value .reg backups ^(single-value undo^) : !_cntVal!
+echo   Full registry exports  ^(HKLM/HKCU^)         : !_cntFull!   ^(~!_mbFull! MB^)
+echo   Preset backups ^(.json^)                     : !_cntJson!
+echo   hosts backups  ^(.bak^)                      : !_cntHosts!
+echo   Logs ^(.log^)                                : !_cntLog!
+echo =====================================================================================
+set "_c="
+set /p "_c=Open this folder in Explorer now? (Y/N): "
+if /i "%_c%"=="Y" start "" "!BACKUP_DIR!"
+if !_cntFull! leq 2 goto _mbDone
+echo.
+echo  You have !_cntFull! full registry exports ^(~!_mbFull! MB^). The newest export alone is
+echo  enough for a full restore, so the older ones are mostly just using disk space.
+set "_c2="
+set /p "_c2=Delete the older full exports, keeping the newest 2 files? (Y/N): "
+if /i not "%_c2%"=="Y" goto _mbDone
+set "_idx=0" & set "_delN=0"
+for /f "delims=" %%F in ('dir /b /a-d /o-d "!BACKUP_DIR!\FullReg_*.reg" 2^>nul') do call :_mbPrune "%%F"
+call :Log "MANAGE pruned !_delN! old full registry exports"
+echo  [OK] Deleted !_delN! older full export^(s^); kept the 2 most recent.
+
+:_mbDone
+echo.
+pause
+goto MenuBackups
+
+:_mbAddFull
+rem  %1 = file size in bytes of one full export; updates the running count + MB total
+set /a _cntFull+=1
+set /a _mbFull+=%~1/1048576
+goto :eof
+
+:_mbPrune
+rem  %1 = bare filename (caller feeds newest-first); keeps the first 2, deletes the rest
+set /a _idx+=1
+if !_idx! leq 2 goto :eof
+del /f /q "!BACKUP_DIR!\%~1" >nul 2>&1
+set /a _delN+=1
+goto :eof
 rem =====================================================================================
 rem  JSON value backup (called by SafeRegAdd when a preset is being applied)
 rem =====================================================================================
