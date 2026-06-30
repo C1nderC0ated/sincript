@@ -293,7 +293,8 @@ goto MenuCleanup
 call :Run "del /f /s /q ""%TEMP%\*.*"""
 call :Run "del /f /s /q ""%SystemRoot%\Temp\*.*"""
 call :Run "del /f /s /q ""%LocalAppData%\Temp\*.*"""
-call :Run "del /f /s /q ""%SystemRoot%\Prefetch\*.*"""
+rem  Intentionally NOT clearing %SystemRoot%\Prefetch - Windows just rebuilds it and the
+rem  next launches get slower; it is a placebo (listed under "What was excluded").
 call :Run "del /f /s /q /a ""%LocalAppData%\Microsoft\Windows\Explorer\*.db"""
 call :Run "del /f /q ""%SystemRoot%\Logs\CBS\*"""
 call :Run "del /f /q ""%SystemRoot%\Logs\DISM\*"""
@@ -389,17 +390,23 @@ echo ===========================================================================
 set /p "_c=Apply performance tweaks? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
 call :DoPerformanceCore
-set "_q1=" & set "_q2=" & set "_q3=" & set "_q3b=" & set "_q4=" & set "_q5=" & set "_q6=" & set "_q7="
+set "_q1=" & set "_q2=" & set "_q3=" & set "_q4=" & set "_q5=" & set "_q6=" & set "_q7="
 echo.
 echo Optional knobs (small / unproven gains - your call):
 set /p "_q1=  SystemResponsiveness=0 (reserve less for background)? (Y/N): "
 if /i "%_q1%"=="Y" call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" REG_DWORD 0 "SystemResponsiveness 0"
 set /p "_q2=  Disable network throttling (may affect media playback)? (Y/N): "
 if /i "%_q2%"=="Y" call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex" REG_DWORD 4294967295 "Network throttling off"
-set /p "_q3=  Win32PrioritySeparation = 42 (0x2A: short/fixed quantum, strong foreground boost)? (Y/N): "
-if /i "%_q3%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 42 (0x2A)"
-set /p "_q3b=  Reset Win32PrioritySeparation to Windows default (2)? (Y/N): "
-if /i "%_q3b%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 2 "Win32PrioritySeparation default (2)"
+rem  One mutually-exclusive choice (not two yes/no prompts): picking 42 and then "reset to 2"
+rem  in the same pass was a net no-op, and the reset's per-value .reg backup would snapshot 42
+rem  (the value just set) instead of the true prior default, breaking that single-value undo.
+echo   Win32PrioritySeparation:
+echo       1 = 42 (0x2A: short/fixed quantum, strong foreground boost)
+echo       2 = 2  (Windows default - pick this to undo a previous 42)
+echo       N = leave unchanged
+set /p "_q3=  Choose [1/2/N]: "
+if "%_q3%"=="1" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 42 (0x2A)"
+if "%_q3%"=="2" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 2 "Win32PrioritySeparation default (2)"
 set /p "_q4=  LargeSystemCache=1 (can help some laptops, can hurt desktops)? (Y/N): "
 if /i "%_q4%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "LargeSystemCache" REG_DWORD 1 "LargeSystemCache on"
 set /p "_q5=  Disable Windows Game Mode (contested; some titles run smoother without it)? (Y/N): "
@@ -609,9 +616,14 @@ cls
 call :Logo
 echo Reverting DNS to automatic (DHCP) on all active adapters...
 call :Log "DNS -> automatic (DHCP)"
-start "" /min /wait powershell -NoProfile -Command "Get-NetAdapter -Physical | ForEach-Object { try { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction Stop } catch {} }"
+set "_dnsres=%TEMP%\pt_dnsres_%RANDOM%.txt"
+del "%_dnsres%" >nul 2>&1
+set "PT_DNSRES=%_dnsres%"
+start "" /min /wait powershell -NoProfile -Command "$ok=0;$fail=0;Get-NetAdapter -Physical -ErrorAction SilentlyContinue | ForEach-Object { try { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses -ErrorAction Stop; $ok++ } catch { $fail++ } }; ('' + $ok + ' ' + $fail) | Out-File -FilePath $env:PT_DNSRES -Encoding ASCII; if($ok -gt 0){exit 0}else{exit 1}"
+set "_dnsrc=%errorlevel%"
+set "PT_DNSRES="
 ipconfig /flushdns >nul 2>&1
-echo [OK] DNS reset to automatic.
+call :DnsResult "%_dnsrc%" "DNS reset to automatic (DHCP)"
 pause
 goto MenuDns
 rem =====================================================================================
@@ -1232,6 +1244,7 @@ echo  Placebo / obsolete / harmful (excluded):
 echo    - XP-era "memory optimization" registry values (fixed pool/cache sizes etc.)
 echo    - Forcing the large system file cache on by default (it is opt-in under Performance)
 echo    - Clearing the pagefile at shutdown (only makes shutdown slower)
+echo    - Clearing the Prefetch folder (Windows rebuilds it; first launches just get slower)
 echo    - Firewall rules that block Google/YouTube IP ranges to "stop throttling" (a myth)
 echo    - Deprecated TCP options (Chimney/NetDMA) removed by Microsoft years ago
 echo    - Hardcoded MTU and other link-specific values copied from another PC
@@ -1494,12 +1507,38 @@ if errorlevel 1 ( call :Log "FAIL: %_cmdlog%" ) else ( call :Log "OK: %_cmdlog%"
 goto :eof
 
 :ApplyDns
-rem %1 = friendly name ; uses %DNSSRV% as the PowerShell address list
+rem %1 = friendly name ; uses %DNSSRV% as the PowerShell address list.
+rem  The per-adapter catch{} used to swallow failures while the batch always printed [OK];
+rem  now the child counts ok/fail adapters and returns an exit code, and :DnsResult reports
+rem  the real outcome - so "no adapter" / not-elevated no longer masquerades as success.
 echo Setting %~1 DNS (IPv4 + IPv6) on all active adapters...
 call :Log "DNS -> %~1 : %DNSSRV%"
-start "" /min /wait powershell -NoProfile -Command "Get-NetAdapter -Physical | ForEach-Object { try { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @(%DNSSRV%) -ErrorAction Stop } catch {} }"
+set "_dnsres=%TEMP%\pt_dnsres_%RANDOM%.txt"
+del "%_dnsres%" >nul 2>&1
+set "PT_DNSRES=%_dnsres%"
+start "" /min /wait powershell -NoProfile -Command "$ok=0;$fail=0;Get-NetAdapter -Physical -ErrorAction SilentlyContinue | ForEach-Object { try { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses @(%DNSSRV%) -ErrorAction Stop; $ok++ } catch { $fail++ } }; ('' + $ok + ' ' + $fail) | Out-File -FilePath $env:PT_DNSRES -Encoding ASCII; if($ok -gt 0){exit 0}else{exit 1}"
+set "_dnsrc=%errorlevel%"
+set "PT_DNSRES="
 ipconfig /flushdns >nul 2>&1
-echo [OK] %~1 DNS applied. Check it under Backups ^& status ^> Show current status.
+call :DnsResult "%_dnsrc%" "%~1 DNS applied"
+if "%_dnsrc%"=="0" echo      Verify under Backups ^& status ^> Show current status.
+goto :eof
+
+:DnsResult
+rem %1 = PS child exit code (0 = at least one adapter changed) ; %2 = success phrase.
+rem  Reads the "ok fail" counts the child left in %_dnsres% and prints an honest line.
+set "_phrase=%~2"
+set "_okN=0" & set "_failN=0"
+if exist "%_dnsres%" for /f "usebackq tokens=1,2" %%a in ("%_dnsres%") do ( set "_okN=%%a" & set "_failN=%%b" )
+del "%_dnsres%" >nul 2>&1
+if "%~1"=="0" (
+    echo [OK] !_phrase! on !_okN! adapter^(s^), !_failN! failed.
+    call :Log "OK: DNS - !_phrase! ok=!_okN! fail=!_failN!"
+) else (
+    echo [ERROR] !_phrase!: it failed on every active adapter. Make sure this window is
+    echo         elevated and that you have an active network adapter, then try again.
+    call :Log "FAIL: DNS - !_phrase! changed no adapters (fail=!_failN!)"
+)
 goto :eof
 
 :ShowReg
@@ -1623,9 +1662,27 @@ goto :eof
 :CreateRegBackup
 echo Exporting HKLM and HKCU (this can take a minute)...
 call :Log "Full registry export"
-reg export HKLM "%BACKUP_DIR%\FullReg_HKLM_%RANDOM%.reg" /y >nul 2>&1
-reg export HKCU "%BACKUP_DIR%\FullReg_HKCU_%RANDOM%.reg" /y >nul 2>&1
-echo [OK] Saved to %BACKUP_DIR%
+rem  Verify BOTH exports actually succeeded and produced a file before claiming success -
+rem  errors are suppressed (>nul 2>&1), so a blind "[OK] Saved" could mask a failed/partial
+rem  backup, and this export is the safety net the whole tool leans on for reversibility.
+set "_rbHKLM=%BACKUP_DIR%\FullReg_HKLM_%RANDOM%.reg"
+set "_rbHKCU=%BACKUP_DIR%\FullReg_HKCU_%RANDOM%.reg"
+set "_rbOK=1"
+reg export HKLM "%_rbHKLM%" /y >nul 2>&1
+if errorlevel 1 set "_rbOK=0"
+if not exist "%_rbHKLM%" set "_rbOK=0"
+reg export HKCU "%_rbHKCU%" /y >nul 2>&1
+if errorlevel 1 set "_rbOK=0"
+if not exist "%_rbHKCU%" set "_rbOK=0"
+if "%_rbOK%"=="1" (
+    echo [OK] Saved to %BACKUP_DIR%
+    call :Log "OK: full registry export -> %_rbHKLM% , %_rbHKCU%"
+) else (
+    echo [ERROR] Full registry backup FAILED or is incomplete - do NOT rely on it.
+    echo         Make sure this window is elevated and that the folder is writable:
+    echo         %BACKUP_DIR%
+    call :Log "FAIL: full registry export (HKLM and/or HKCU missing or errored)"
+)
 goto :eof
 
 :InstallAsarInto
@@ -1644,19 +1701,44 @@ if exist "%_res%\_app.asar"     set "_target=_app.asar"
 if exist "%_res%\app.orig.asar" set "_target=app.orig.asar"
 if exist "%_res%\app.asar.orig" set "_target=app.asar.orig"
 echo [%_flav%] Target: "%_res%\!_target!"
+rem  Two backups of the original: one BESIDE the .asar (easy in-place restore) and one in the
+rem  backup folder. Security software / Controlled Folder Access frequently blocks writes INTO
+rem  Discord's program folder while still allowing Documents, so the in-folder .bak can fail
+rem  silently. Verify which backup actually landed and report THAT, instead of always claiming
+rem  the in-folder copy exists.
+set "_localbak=%_res%\!_target!.bak"
+set "_docbak=%BACKUP_DIR%\%_flav%_!_target!.bak"
+set "_hadorig=0"
+set "_bakloc="
 if exist "%_res%\!_target!" (
-    copy /y "%_res%\!_target!" "%_res%\!_target!.bak" >nul 2>&1
-    copy /y "%_res%\!_target!" "%BACKUP_DIR%\%_flav%_!_target!.bak" >nul 2>&1
+    set "_hadorig=1"
+    attrib -r "!_localbak!" >nul 2>&1
+    copy /y "%_res%\!_target!" "!_localbak!" >nul 2>&1
+    copy /y "%_res%\!_target!" "!_docbak!"  >nul 2>&1
+    if exist "!_localbak!" set "_bakloc=local"
+    if not exist "!_localbak!" if exist "!_docbak!" set "_bakloc=doc"
 )
 copy /y "%_src%" "%_res%\!_target!" >nul
 if errorlevel 1 (
     echo [WARN] %_flav%: copy failed ^(file in use? quit Discord fully and re-run^).
-) else (
-    echo [OK] %_flav%: OpenAsar installed. Backup: "!_target!.bak"
-    endlocal & set "_DONE=1" & goto :eof
+    endlocal
+    goto :eof
 )
-endlocal
-goto :eof
+if "!_bakloc!"=="local" echo [OK] %_flav%: OpenAsar installed. Original backed up beside the .asar as "!_target!.bak".
+if "!_bakloc!"=="doc" (
+    echo [OK] %_flav%: OpenAsar installed, but the backup could NOT be written into Discord's
+    echo      folder ^(often blocked by antivirus / Controlled Folder Access^). The original is
+    echo      safe in the backup folder - to revert, copy it back over the .asar:
+    echo        from: "!_docbak!"
+    echo        to:   "%_res%\!_target!"
+)
+if not defined _bakloc if "!_hadorig!"=="1" (
+    echo [WARN] %_flav%: OpenAsar installed, but NO backup of the original could be saved
+    echo        ^(both Discord's folder and the backup folder were blocked^). To revert,
+    echo        reinstall Discord - then allow writes and re-run if you want a backup.
+)
+if not defined _bakloc if "!_hadorig!"=="0" echo [OK] %_flav%: OpenAsar installed. ^(No previous .asar to back up.^)
+endlocal & set "_DONE=1" & goto :eof
 rem =====================================================================================
 rem  PRESETS  -  auto-apply groups of tweaks; registry changes saved to ONE JSON backup
 rem =====================================================================================
