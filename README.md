@@ -131,7 +131,7 @@ Like the built-in presets, a custom preset writes a single JSON registry backup 
 The script is built around being undoable.
 
 - **Per-value registry backups.** Before changing any registry value, the script saves a small `.reg` file containing **only that one value's previous state** to `Documents\PerfTweaks_Backups`. Double-click that `.reg` to put the value back. (It backs up just the value, not the whole key, so backups stay tiny — typically about 1 KB each.)
-- **Full registry export** (optional) — exports all of `HKLM` and `HKCU` to `Documents\PerfTweaks_Backups`.
+- **Full registry export** (optional) — exports all of `HKLM` and `HKCU` to `Documents\PerfTweaks_Backups`. It verifies both exports actually produced a file before reporting success, so a failed or partial backup (e.g. not elevated, or the folder isn't writable) is flagged with `[ERROR]` instead of a misleading `[OK]`.
 - **System Restore Point** (optional) — created on demand; `Apply recommended safe set` also offers to make one first.
 - **Log file** — every action is logged to `Documents\PerfTweaks_Backups\PerfTweaks_<random>.log`.
 
@@ -173,6 +173,10 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 
 Newest first. Feature details live in the sections above — this is just what changed.
 
+- **Static test harness (`tests/`).** A dependency-free PowerShell script (`tests/Run-Tests.ps1`, runs on stock Windows PowerShell 5.1 — no Pester or extra modules) statically checks invariants that are easy to break silently: every menu `goto`/`call` resolves to a real label, `boot.config` has no duplicate keys (a stray duplicate `wait-for-native-debugger` line was removed), `example.preset` uses only keys the in-script validator recognizes (parsed from the script itself, so it can't drift), and the reliability fixes below don't quietly regress. Run it with `powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1` (exit `0` = all passed); `tests/README.md` documents each check.
+- **No more false "success" messages.** Three actions used to print `[OK]` even when they had silently failed; each now reports the real outcome. The **full registry backup** confirms both the `HKLM` and `HKCU` exports actually wrote a file (this export is the tool's main safety net) and prints `[ERROR]` with what to check otherwise. **DNS apply/reset** counts how many adapters actually changed versus failed — e.g. `[OK] Cloudflare DNS applied on 3 adapter(s), 0 failed`, or an `[ERROR]` when nothing changed (no active adapter, or not elevated). **OpenAsar** reports *which* backup of the original was saved, because antivirus / Controlled Folder Access often blocks the copy written into Discord's own folder while still allowing the one in `Documents\PerfTweaks_Backups`.
+- **Performance: a single `Win32PrioritySeparation` choice.** The two separate yes/no prompts ("set to 42?" then "reset to default 2?") are now one choice — `1` = 42, `2` = Windows default, `N` = leave unchanged. Answering yes to both was a confusing no-op, and the reset's per-value `.reg` undo file ended up snapshotting the just-set 42 instead of the true prior value; only one can apply now.
+- **Prefetch is no longer cleared.** Clearing `%SystemRoot%\Prefetch` is placebo — Windows rebuilds it and the next few launches just get slower — and it went against the script's own "what was excluded" stance. It's removed from the cleanup (and therefore from the recommended set and every preset) and is now listed on the **What was excluded** screen.
 - **Backup-folder manager (Backups & status).** New *Manage / open backup folder* item shows a per-category summary of `Documents\PerfTweaks_Backups` (how many per-value `.reg` undo files, full `HKLM`/`HKCU` exports and roughly how many MB they occupy, preset JSONs, hosts backups and logs), opens the folder in Explorer on request, and offers a safe one-shot prune of the **older full-registry exports** while always keeping the newest pair. The small per-value `.reg` backups and preset JSONs - the precise undo data - are never deleted. This reclaims the disk space those large exports accumulate without weakening reversibility.
 - **In-app single-value restore (Backups & status).** New *Restore a single value backup (.reg)* item lists the small per-value `.reg` backups the script writes before each registry tweak (newest first) and re-imports the one you pick — logged, and reversing a single manual change no longer means leaving the tool to double-click in Explorer. It reads the same backups as before; full-registry exports (`FullReg_*.reg`) are filtered out of the list and stay a manual import. The companion *Restore from a preset backup (JSON)* item (for preset changes) is unchanged.
 - **Per-app CPU priority (Advanced).** New *Set permanent process priority* item pins a per-`.exe` priority (High / Above normal / Normal / Below normal / Low) via Image File Execution Options (`CpuPriorityClass`), which Windows re-applies on every launch — backed up and reversible, with a *Remove override* option. Target the .exe that actually runs (Task Manager → Details), since High / Above-normal don't pass to child processes; Realtime is intentionally not offered.
@@ -206,7 +210,19 @@ Newest first. Feature details live in the sections above — this is just what c
 
 ## "What was excluded" — the philosophy
 
-The in-app **`11. What was excluded`** screen lists, by category, the popular "tweaks" this script intentionally omits — for example security-weakening changes (disabling Defender, the firewall, UAC, or SmartScreen), placebo or obsolete registry values, firewall rules that block Google/YouTube IP ranges, hard-coded MTU values, and bulk undocumented GPU dumps. It also covers items from popular gaming guides that are deliberately skipped — Windows activation scripts, replacing Defender with a third-party antivirus, aggressive RAM / standby “cleaners”, and forcing MSI mode or NIC parameter edits (which the experienced guides themselves advise against). Read it to understand the safety rationale.
+The in-app **`11. What was excluded`** screen lists, by category, the popular "tweaks" this script intentionally omits — for example security-weakening changes (disabling Defender, the firewall, UAC, or SmartScreen), placebo or obsolete registry values, clearing the Prefetch folder (Windows just rebuilds it, slowing the next few launches), firewall rules that block Google/YouTube IP ranges, hard-coded MTU values, and bulk undocumented GPU dumps. It also covers items from popular gaming guides that are deliberately skipped — Windows activation scripts, replacing Defender with a third-party antivirus, aggressive RAM / standby “cleaners”, and forcing MSI mode or NIC parameter edits (which the experienced guides themselves advise against). Read it to understand the safety rationale.
+
+---
+
+## Tests
+
+Sincript ships with a small **static-analysis** harness in `tests/`. `PerfTweaks.cmd` is interactive and changes the system, so it can't be safely unit-tested by *running* it; instead `tests/Run-Tests.ps1` checks the script's text for invariants that tend to break silently — every `goto`/`call` resolves to a real label, no duplicate `boot.config` keys, `example.preset` matching the in-script validator, and each of the reliability fixes above staying in place. It needs nothing extra (stock Windows PowerShell 5.1, no Pester):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
+```
+
+Exit code `0` means every check passed; `1` means at least one failed, with the offending detail printed. See `tests/README.md` for the full list of checks.
 
 ---
 
