@@ -62,7 +62,7 @@ echo     2.  Performance tweaks       (GameDVR off, priorities, snappier UI)
 echo     3.  Privacy ^& telemetry      (telemetry, ads, Cortana, location off)
 echo     4.  Power plan               (high-performance, no sleep)
 echo     5.  Network ^& DNS            (TCP tweaks, DNS, reset stack)
-echo     6.  Apps ^& files            (OpenAsar, Unity boot.config, hosts, SteamLight)
+echo     6.  Apps ^& files            (OpenAsar, boot.config, hosts, SteamLight, startup)
 echo     7.  Advanced                 (at your own risk - mitigations, timers, IPv6, GPU)
 echo     8.  Backups ^& status        (restore point, registry backup, current status)
 echo -----------------------------------------------------------------------------------
@@ -185,6 +185,7 @@ echo     5.  Install SteamLight (lightweight Steam launcher + desktop shortcut)
 echo     6.  Apply timer resolution (SetTimerResolution autostart)
 echo     7.  Remove timer resolution
 echo     8.  Remove built-in apps (debloat)
+echo     9.  Manage startup programs (enable / disable, reversible)
 echo     0.  Back
 echo =====================================================================================
 
@@ -200,6 +201,7 @@ if "%sel%"=="5" goto SteamLight
 if "%sel%"=="6" goto TimerResApply
 if "%sel%"=="7" goto TimerResRemove
 if "%sel%"=="8" goto Debloat
+if "%sel%"=="9" goto StartupMgr
 if "%sel%"=="0" goto MainMenu
 goto MenuApps
 rem =====================================================================================
@@ -521,7 +523,13 @@ goto MainMenu
 
 :DoPowerCore
 call :Log "Power plan -> Ultimate (fallback High), no sleep"
-powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 >nul 2>&1
+rem  Duplicate Ultimate ONTO its canonical GUID. Without a destination GUID every run
+rem  created another randomly-numbered "Ultimate Performance" clone that /setactive (which
+rem  targets the canonical GUID) never used - so unused plans piled up and the fallback
+rem  High plan was what actually activated. With the destination set this is idempotent:
+rem  the first run creates the plan, re-runs fail harmlessly ("already exists", which is
+rem  suppressed), and /setactive then finds the real Ultimate plan.
+powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 e9a42b02-d5df-448d-aa00-03f14749eb61 >nul 2>&1
 powercfg /setactive e9a42b02-d5df-448d-aa00-03f14749eb61 >nul 2>&1 || powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c >nul 2>&1
 call :Run "powercfg -change -monitor-timeout-ac 0"
 call :Run "powercfg -change -monitor-timeout-dc 0"
@@ -646,6 +654,10 @@ set /p "_dl=Download the latest OpenAsar (nightly) from GitHub instead? (Y/N): "
 if /i not "%_dl%"=="Y" goto MenuApps
 echo Downloading OpenAsar nightly...
 start "" /min /wait powershell -NoProfile -Command "try{Invoke-WebRequest -Uri 'https://github.com/GooseMod/OpenAsar/releases/download/nightly/app.asar' -OutFile (Join-Path $env:TEMP 'openasar_nightly.asar') -UseBasicParsing}catch{exit 1}"
+rem  A failed download can leave a PARTIAL file behind; trust the child exit code first
+rem  and remove the leftover, so a broken .asar is never installed into Discord.
+if errorlevel 1 del "%TEMP%\openasar_nightly.asar" >nul 2>&1
+if errorlevel 1 goto OA_DlFail
 if not exist "%TEMP%\openasar_nightly.asar" goto OA_DlFail
 set "_SRC=%TEMP%\openasar_nightly.asar"
 
@@ -860,7 +872,7 @@ if not exist "%_HOSTS%.bak" (
     goto RestoreHosts
 )
 copy /y "%_HOSTS%.bak" "%_HOSTS%" >nul
-if errorlevel 1 ( echo [WARN] Restore failed (AV tamper protection?). ) else ( echo [OK] hosts restored from backup. & call :Run "ipconfig /flushdns" )
+if errorlevel 1 ( echo [WARN] Restore failed ^(AV tamper protection?^). ) else ( echo [OK] hosts restored from backup. & call :Run "ipconfig /flushdns" )
 pause
 goto MenuApps
 
@@ -879,7 +891,7 @@ echo # localhost name resolution is handled within DNS itself.
 echo #	127.0.0.1       localhost
 echo #	::1             localhost
 ) > "%_HOSTS%"
-if errorlevel 1 ( echo [WARN] Reset failed (AV tamper protection?). ) else ( echo [OK] hosts reset to Windows default ^(old one saved as hosts.bak^). & call :Run "ipconfig /flushdns" )
+if errorlevel 1 ( echo [WARN] Reset failed ^(AV tamper protection?^). ) else ( echo [OK] hosts reset to Windows default ^(old one saved as hosts.bak^). & call :Run "ipconfig /flushdns" )
 pause
 goto MenuApps
 rem =====================================================================================
@@ -1405,6 +1417,109 @@ echo Done. Any removed app can be reinstalled later from the Microsoft Store.
 pause
 goto MenuApps
 
+rem =====================================================================================
+rem  ACTION: Manage startup programs (the reversible Task Manager switch, with backups)
+rem =====================================================================================
+:StartupMgr
+cls
+call :Logo
+echo =========================  MANAGE STARTUP PROGRAMS  ===============================
+echo  Lists what starts with Windows - the Run registry keys (HKCU / HKLM / WOW64) and
+echo  both Startup folders - and lets you flip any entry between Enabled and Disabled.
+echo  This is the same reversible StartupApproved switch Task Manager uses: nothing is
+echo  deleted, and the entry's previous state is saved as a .reg backup before each
+echo  flip (restorable from Backups ^& status, or by double-clicking the file).
+echo =====================================================================================
+set "_sulist=%TEMP%\pt_startup_%RANDOM%.txt"
+set "_sures=%TEMP%\pt_sures_%RANDOM%.txt"
+del "%_sulist%" >nul 2>&1
+call :StartupWorker list 0
+if not exist "%_sulist%" (
+    echo [ERROR] Could not enumerate startup entries ^(PowerShell blocked or unavailable^).
+    pause
+    goto MenuApps
+)
+set "_sn=0"
+for /f "usebackq tokens=1,2,3,* delims=|" %%a in ("%_sulist%") do (
+    set /a _sn+=1
+    set "_sst[!_sn!]=%%b"
+    set "_ssc[!_sn!]=%%c"
+    set "_snm[!_sn!]=%%d"
+)
+del "%_sulist%" >nul 2>&1
+if "%_sn%"=="0" (
+    echo  No startup entries found ^(the Run keys and Startup folders are empty^).
+    pause
+    goto MenuApps
+)
+echo   #    State      Source           Name
+echo -----------------------------------------------------------------------------------
+for /l %%I in (1,1,%_sn%) do call :_suShow %%I
+echo -----------------------------------------------------------------------------------
+echo  Names are shown ASCII-only ^(other characters appear as "?"^); a flip still
+echo  targets the exact entry. Disabled entries stay listed and can be re-enabled.
+
+:StartupMgr_ask
+set "sel="
+set /p "sel=Number to flip Enabled/Disabled (0 = back): "
+if not defined sel goto StartupMgr_ask
+if "%sel%"=="0" goto MenuApps
+set "_sok="
+for /l %%I in (1,1,%_sn%) do if "%sel%"=="%%I" set "_sok=1"
+if not defined _sok goto StartupMgr_ask
+echo.
+echo  About to flip:  [!_sst[%sel%]!]  !_ssc[%sel%]!  -  !_snm[%sel%]!
+set "_cc="
+set /p "_cc=Proceed? (Y/N): "
+if /i not "%_cc%"=="Y" goto StartupMgr_ask
+del "%_sures%" >nul 2>&1
+call :StartupWorker toggle %sel%
+set "_surc=%errorlevel%"
+echo.
+if exist "%_sures%" ( type "%_sures%" & del "%_sures%" >nul 2>&1 )
+if "%_surc%"=="0" (
+    echo [OK] Flipped. Takes effect at the next sign-in; flip it again any time to undo.
+    call :Log "STARTUP flip #%sel% ok"
+) else (
+    echo [ERROR] The flip failed - nothing was changed. If it is an HKLM / Common entry,
+    echo         make sure this window is elevated, then try again.
+    call :Log "STARTUP flip #%sel% FAILED"
+)
+pause
+goto StartupMgr
+
+:_suShow
+rem %1 = 1-based index into the _sst/_ssc/_snm listing arrays; prints one aligned row.
+set "_p1=%1.    "
+set "_p1=!_p1:~0,5!"
+set "_p2=!_sst[%1]!            "
+set "_p2=!_p2:~0,11!"
+set "_p3=!_ssc[%1]!                 "
+set "_p3=!_p3:~0,17!"
+set "_p4=!_snm[%1]!"
+echo   !_p1!!_p2!!_p3!!_p4:~0,58!
+goto :eof
+
+:StartupWorker
+rem %1 = list | toggle   %2 = 1-based entry index (toggle mode; ignored for list)
+rem  One shared PowerShell worker in a minimized window (font-safe + locale-safe, the
+rem  same pattern as DNS/status). It enumerates the Run keys and Startup folders in a
+rem  FIXED, sorted order, so the number picked from the listing addresses the same entry
+rem  in the toggle call - the entry NAME never round-trips through cmd, so non-ASCII
+rem  names stay intact. A flip first writes the value's prior state to a .reg backup
+rem  (UTF-16, the native regedit format) in the backup folder, THEN writes the Task
+rem  Manager-style StartupApproved value: 02.. = enabled, 03 + timestamp = disabled.
+rem  Registry access uses literal-path/.NET calls so names with wildcard characters
+rem  ([ ] * ?) cannot misfire onto a different value.
+set "PT_SU_MODE=%~1"
+set "PT_SU_IDX=%~2"
+set "PT_SU_LIST=%_sulist%"
+set "PT_SU_RES=%_sures%"
+set "PT_SU_BAK=%BACKUP_DIR%"
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $srcs=@(@('HKCU:\Software\Microsoft\Windows\CurrentVersion\Run','HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run','HKCU-Run'),@('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run','HKLM-Run'),@('HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32','HKLM-Run32')); $E=@(); foreach($s in $srcs){ $k=Get-Item -LiteralPath $s[0] -ErrorAction SilentlyContinue; if($k){ foreach($n in ($k.GetValueNames() | Sort-Object)){ if($n -ne ''){ $E+=,@($s[2],$s[1],$n) } } } }; $dirs=@(@([Environment]::GetFolderPath('Startup'),'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder','User-Startup'),@([Environment]::GetFolderPath('CommonStartup'),'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder','Common-Startup')); foreach($s in $dirs){ if($s[0] -and (Test-Path -LiteralPath $s[0])){ foreach($f in (Get-ChildItem -LiteralPath $s[0] -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'desktop.ini' } | Sort-Object Name)){ $E+=,@($s[2],$s[1],$f.Name) } } }; function S($a,$n){ $k=Get-Item -LiteralPath $a -ErrorAction SilentlyContinue; if($k){ $v=$k.GetValue($n); if($v -and $v.Length -ge 1 -and (($v[0] -band 1) -eq 1)){ return 'Disabled' } }; return 'Enabled' }; if($env:PT_SU_MODE -eq 'list'){ $i=0; $o=@(); foreach($x in $E){ $i++; $dn=$x[2] -replace '[^\x20-\x7e]','?' -replace '[\x21\x22\x25\x26\x3c\x3e\x5e\x7c]','?'; $o+=(''+$i+'|'+(S $x[1] $x[2])+'|'+$x[0]+'|'+$dn) }; $o | Out-File -FilePath $env:PT_SU_LIST -Encoding ASCII; exit 0 }; $n=0; try{ $n=[int]$env:PT_SU_IDX }catch{ $n=0 }; if($n -lt 1 -or $n -gt $E.Count){ 'Entry not found - the startup list changed. Nothing was modified.' | Out-File -FilePath $env:PT_SU_RES -Encoding ASCII; exit 1 }; $x=$E[$n-1]; $appr=$x[1]; $name=$x[2]; $cur=S $appr $name; $had=$false; $raw=$null; $k=Get-Item -LiteralPath $appr -ErrorAction SilentlyContinue; if($k){ $raw=$k.GetValue($name); if($null -ne $raw){ $had=$true } }; $rk=$appr.Replace('HKCU:','HKEY_CURRENT_USER').Replace('HKLM:','HKEY_LOCAL_MACHINE'); $q=[char]34; $en=$name.Replace('\','\\').Replace([string]$q,'\'+$q); $bak=Join-Path $env:PT_SU_BAK ('StartupApproved_'+(Get-Random)+'.reg'); $body=@('Windows Registry Editor Version 5.00','','['+$rk+']'); if($had -and ($raw -is [byte[]])){ $hex=(($raw | ForEach-Object { $_.ToString('x2') }) -join ','); $body+=($q+$en+$q+'=hex:'+$hex) } elseif($had){ $body+=('; original value was not REG_BINARY - not auto-restorable from this file') } else { $body+=($q+$en+$q+'=-') }; $body | Out-File -FilePath $bak -Encoding Unicode; if($cur -eq 'Enabled'){ $new=[byte[]](3,0,0,0)+[BitConverter]::GetBytes([DateTime]::Now.ToFileTime()); $ns='Disabled' } else { $new=[byte[]](2,0,0,0,0,0,0,0,0,0,0,0); $ns='Enabled' }; try{ [Microsoft.Win32.Registry]::SetValue($rk,$name,[byte[]]$new,[Microsoft.Win32.RegistryValueKind]::Binary) }catch{ Remove-Item -LiteralPath $bak -ErrorAction SilentlyContinue; ('Could not write the new state: '+$_.Exception.Message) | Out-File -FilePath $env:PT_SU_RES -Encoding ASCII; exit 1 }; $dn=$name -replace '[^\x20-\x7e]','?'; ((''+$dn+' : '+$cur+' -> '+$ns),('Backup of the previous state: '+$bak)) | Out-File -FilePath $env:PT_SU_RES -Encoding ASCII; exit 0"
+set "_swrc=%errorlevel%"
+set "PT_SU_MODE=" & set "PT_SU_IDX=" & set "PT_SU_LIST=" & set "PT_SU_RES=" & set "PT_SU_BAK="
+exit /b %_swrc%
 :RequireBundledFile
 rem %1 = filename beside PerfTweaks.cmd   %2 = short description for messages/log
 set "_bundled=%SCRIPT_DIR%%~1"
@@ -1918,6 +2033,8 @@ call :Log "PRESET OpenAsar: downloading nightly"
 set "PT_OA=%TEMP%\openasar_nightly.asar"
 del "%PT_OA%" >nul 2>&1
 start "" /min /wait powershell -NoProfile -Command "try{Invoke-WebRequest -Uri 'https://github.com/GooseMod/OpenAsar/releases/download/nightly/app.asar' -OutFile $env:PT_OA -UseBasicParsing}catch{exit 1}"
+rem  Same partial-download guard as the interactive path: exit code first, then existence.
+if errorlevel 1 del "%PT_OA%" >nul 2>&1
 if not exist "%PT_OA%" (
     echo [ERROR] OpenAsar download failed - skipping. Put app.asar next to the script and retry.
     call :Log "PRESET OpenAsar: download failed"
