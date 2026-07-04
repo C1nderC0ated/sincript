@@ -6,7 +6,7 @@ A single, menu-driven batch script (`PerfTweaks.cmd`) that applies a **curated, 
 
 Everything is opt-in from a menu, every registry change is backed up before it is made, and the script can create a System Restore Point and a full registry export on request. There is no silent "apply everything" — you choose what runs.
 
-The **runtime** is a single self-contained `PerfTweaks.cmd` (no installer, no extra dependencies). The release also ships optional bundled inputs, an example custom preset, and a developer test harness — see [Repository contents](#repository-contents) below.
+The **runtime** is a single self-contained `PerfTweaks.cmd` (no installer, no extra dependencies). The release also ships optional bundled inputs, optional timer-resolution helper, an example custom preset, and a developer test harness — see [Release contents](#release-contents) below.
 
 ---
 
