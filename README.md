@@ -6,13 +6,28 @@ A single, menu-driven batch script (`PerfTweaks.cmd`) that applies a **curated, 
 
 Everything is opt-in from a menu, every registry change is backed up before it is made, and the script can create a System Restore Point and a full registry export on request. There is no silent "apply everything" — you choose what runs.
 
+The **runtime** is a single self-contained `PerfTweaks.cmd` (no installer, no extra dependencies). This repository also ships optional bundled inputs, an example custom preset, and a developer test harness — see [Repository contents](#repository-contents) below.
+
+---
+
+## Repository contents
+
+| Path | Role |
+|------|------|
+| `PerfTweaks.cmd` | The tool — copy this anywhere you want to run it |
+| `boot.config`, `hosts` | Optional inputs for the Unity and hosts actions (place next to the script) |
+| `sincript_presets/` | Folder for custom `.preset` files; includes `example.preset` |
+| `tests/` | Static-analysis harness (`Run-Tests.ps1`) — for development/CI, not needed on end-user PCs |
+| `README_sincript.md` | This documentation |
+
 ---
 
 ## Requirements
 
 - Windows 10 or Windows 11 (tested on recent builds, including 24H2 / build 26100).
-- Administrator rights. The script **auto-elevates**: when launched, it requests elevation through UAC and relaunches itself elevated. You only need to approve the UAC prompt.
-- No installation, no dependencies. It is a single self-contained `.cmd` file.
+- **Administrator rights** for the full feature set. The script **auto-elevates**: when launched, it requests elevation through UAC and relaunches itself elevated. Approve the UAC prompt for HKLM changes, services, BCD edits, restore points, and similar.
+- If you **decline UAC** (or elevation probes are unavailable), the script warns and asks whether to continue in **limited mode** — only per-user (HKCU) tweaks and read-only status screens can work reliably there; privileged actions report `[WARN]` instead of a misleading `[OK]`.
+- No installation beyond copying the files you need.
 
 ## How to run
 
@@ -44,8 +59,8 @@ Everything is opt-in from a menu, every registry change is backed up before it i
 | 0 | Exit | |
 
 ### Sub-menus
-- **Cleanup & repair** — Disk cleanup · SFC + DISM repair · Windows Update reset · re-register Microsoft Store · compact WinSxS.
-- **Network & DNS** — Apply TCP tweaks · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
+- **Cleanup & repair** — Disk cleanup (with an optional, irreversible clear of **all Event Viewer logs**) · SFC + DISM repair · Windows Update reset · re-register Microsoft Store · compact WinSxS.
+- **Network & DNS** — Apply TCP tweaks (autotuning, RSS/RSC; optional **Nagle / delayed-ACK off** for lower latency) · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
 - **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut) · apply or remove a higher **timer resolution** (SetTimerResolution autostart) · remove built-in Store apps (**debloat**) · **manage startup programs** (flip Run-key and Startup-folder entries between Enabled and Disabled — the same reversible StartupApproved switch Task Manager uses; the prior state is saved to a `.reg` backup before every flip).
 - **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA telemetry tasks + registry, or the AMD User Experience Program opt-out) · GPU hardware scheduling (HAGS) on/off · set a permanent per-program CPU priority (per `.exe`, via Image File Execution Options).
 - **Presets** — Apply a built-in **light**, **moderate**, or **heavy** preset (no per-item prompts) · apply a **custom** preset from a `.preset` file · **restore** the registry values a preset changed from one of its JSON backups.
@@ -130,10 +145,11 @@ Like the built-in presets, a custom preset writes a single JSON registry backup 
 
 The script is built around being undoable.
 
-- **Per-value registry backups.** Before changing any registry value, the script saves a small `.reg` file containing **only that one value's previous state** to `Documents\PerfTweaks_Backups`. Double-click that `.reg` to put the value back. (It backs up just the value, not the whole key, so backups stay tiny — typically about 1 KB each.)
+- **Per-value registry backups.** Before changing any registry value, the script saves a small `.reg` file containing **only that one value's previous state** to `Documents\PerfTweaks_Backups`. Double-click that `.reg` to put the value back. (It backs up just the value, not the whole key, so backups stay tiny — typically about 1 KB each.) Values containing quotes or empty `REG_SZ` data are backed up in a form that restores correctly; filenames use a wide random suffix so two values under the same key cannot overwrite each other's undo file in one pass.
 - **Full registry export** (optional) — exports all of `HKLM` and `HKCU` to `Documents\PerfTweaks_Backups`. It verifies both exports actually produced a file before reporting success, so a failed or partial backup (e.g. not elevated, or the folder isn't writable) is flagged with `[ERROR]` instead of a misleading `[OK]`.
 - **System Restore Point** (optional) — created on demand; `Apply recommended safe set` also offers to make one first.
 - **Log file** — every action is logged to `Documents\PerfTweaks_Backups\PerfTweaks_<random>.log`.
+- **Honest status lines.** Registry-heavy actions finish with `[OK]` only when every write in that action succeeded; otherwise you get `[WARN]` with a count and inline `[FAIL]` lines above pointing at what did not apply (common causes: not elevated, or a protected key). DNS, full-registry backup, OpenAsar, preset JSON restore, and admin-only repair actions (DISM/SFC, Windows Update reset, WinSxS compaction, memory compression) use the same principle — `[ERROR]` or `[WARN]` when something genuinely failed, not a blanket `[OK]`. The **apply hosts** action refuses to overwrite the system `hosts` file until a backup of the current file has landed.
 
 All backups and logs live in **`Documents\PerfTweaks_Backups`** — a `PerfTweaks_Backups` folder inside your user **Documents** folder. The script auto-detects the real Documents path (including OneDrive-redirected Documents) and falls back to `%USERPROFILE%\Documents` if needed.
 
@@ -174,12 +190,20 @@ Some actions can use files placed **next to `PerfTweaks.cmd`**. They are optiona
 
 Newest first. Feature details live in the sections above — this is just what changed.
 
+- **Honest registry-action reporting.** Registry-heavy menu actions and presets reset a per-action failure tally, print inline `[FAIL]` when a write does not apply, and finish through `:Summary` with `[OK]` or `[WARN]` (with a count) instead of an unconditional success line. Service/boot/network work routed through `:Run` only counts as failed when the session is genuinely not elevated — benign "already stopped" exits while elevated are not treated as errors. Guarded by tests 13–15, 24–25, 27.
+- **Limited mode when UAC is declined.** If elevation fails after the relaunch, the script explains that HKLM/service/boot changes will not work, sets an internal not-elevated flag, and asks whether to continue in per-user-only mode instead of silently pretending everything succeeded. Repair actions (DISM/SFC, Windows Update reset, WinSxS compaction, memory compression) gate their final line on elevation. Guarded by tests 17, 28.
+- **Preset parser empty-value guard.** A `key=` line with no value no longer aborts the entire script with a cmd syntax error. Guarded by test 16.
+- **hosts apply requires a backup first.** The custom-hosts action confirms a backup of the current system `hosts` file landed before overwriting it. Guarded by test 18.
+- **Preset JSON restore honesty + quote-safe REG_SZ.** Restore reports `[WARN]`/`[ERROR]` on partial or unreadable backups; `REG_SZ` values restore via `Set-ItemProperty` so embedded quotes are not mangled by `reg.exe` from PowerShell. Guarded by tests 19, 23.
+- **OpenAsar targets the newest Discord build by version**, not ASCII folder-name order (which could pick an older build after a digit rollover). Guarded by test 20.
+- **Per-value backup integrity.** Quotes in prior `REG_SZ` data are escaped in undo files (not dropped); empty values are handled; backup filenames use `%RANDOM%%RANDOM%` so two values under one key cannot collide in a single apply pass. Guarded by tests 21–22.
+- **SteamLight handles apostrophes in the Steam path** (e.g. `C:\Users\O'Brien\...`) by passing the path through an environment variable instead of embedding it in a PowerShell literal. Guarded by test 26.
+- **Static test harness expanded to 28 checks** (`tests/Run-Tests.ps1`). Same dependency-free PowerShell 5.1 runner; `tests/README.md` lists every check. The harness now also guards honest reporting, elevation behavior, backup integrity, and preset-restore correctness — not just menu labels and the earlier reliability fixes.
 - **Startup programs manager (Apps & files).** New *Manage startup programs* item lists everything that starts with Windows — the `Run` registry keys (HKCU, HKLM, HKLM-WOW64) and both Startup folders — and flips any entry between **Enabled** and **Disabled** using the same reversible `StartupApproved` switch Task Manager uses. Nothing is deleted, and each flip first saves the entry's previous state as a tiny `.reg` backup (written UTF-16, the native regedit format, so non-ASCII entry names restore correctly); it shows up under *Backups & status → Restore a single value backup* like every other tweak. Listing and flipping run in one PowerShell worker with a fixed sort order, so the entry name never round-trips through `cmd` — entries with localized (e.g. Cyrillic) names are flipped exactly, even though the console list shows them ASCII-only. Guarded by test 12.
 - **Fixed: restoring or resetting the hosts file crashed the whole script.** The result line of both actions contained an unescaped `(AV tamper protection?)` inside a one-line `if ( ) else ( )`; `cmd` treats a bare `)` as the end of the block even mid-text, and the leftover made the parser abort the entire batch with *"was unexpected at this time"* — right after the hosts file had already been written, so the confirmation, DNS flush and pause never ran (a double-clicked window just vanished). The parentheses are now escaped, and the harness gained a **cmd block-parse simulation** (test 9) that fails on any unescaped `)` inside a block, so this whole crash class can't quietly return.
 - **Fixed: the Ultimate power plan never actually activated, and clones piled up.** `powercfg -duplicatescheme` without a destination GUID mints a new random-GUID "Ultimate Performance" copy on every run, while `/setactive` targeted the canonical GUID — which the copies never had — so the High Performance fallback is what really activated, and an unused Ultimate clone was added every time the power core ran (that includes every moderate / heavy / power-enabled custom preset). The duplication now targets the canonical GUID itself: the first run creates the plan, re-runs fail harmlessly, and `/setactive` finds the real thing. Guarded by test 10.
 - **Fixed: a failed OpenAsar download could install a broken file.** `Invoke-WebRequest` can leave a *partial* file behind when a download dies mid-transfer, and both download paths (interactive and preset) only checked that the file existed — so a truncated `.asar` passed the check and was copied over Discord's real one. Both paths now trust the child exit code first and delete the leftover before the existence check. Guarded by test 11.
-- **Static test harness (`tests/`).** A dependency-free PowerShell script (`tests/Run-Tests.ps1`, runs on stock Windows PowerShell 5.1 — no Pester or extra modules) statically checks invariants that are easy to break silently: every menu `goto`/`call` resolves to a real label, `boot.config` has no duplicate keys (a stray duplicate `wait-for-native-debugger` line was removed), `example.preset` uses only keys the in-script validator recognizes (parsed from the script itself, so it can't drift), and the reliability fixes below don't quietly regress. Run it with `powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1` (exit `0` = all passed); `tests/README.md` documents each check.
-- **No more false "success" messages.** Three actions used to print `[OK]` even when they had silently failed; each now reports the real outcome. The **full registry backup** confirms both the `HKLM` and `HKCU` exports actually wrote a file (this export is the tool's main safety net) and prints `[ERROR]` with what to check otherwise. **DNS apply/reset** counts how many adapters actually changed versus failed — e.g. `[OK] Cloudflare DNS applied on 3 adapter(s), 0 failed`, or an `[ERROR]` when nothing changed (no active adapter, or not elevated). **OpenAsar** reports *which* backup of the original was saved, because antivirus / Controlled Folder Access often blocks the copy written into Discord's own folder while still allowing the one in `Documents\PerfTweaks_Backups`.
+- **No more false "success" messages (first wave).** Three actions used to print `[OK]` even when they had silently failed; each now reports the real outcome. The **full registry backup** confirms both the `HKLM` and `HKCU` exports actually wrote a file (this export is the tool's main safety net) and prints `[ERROR]` with what to check otherwise. **DNS apply/reset** counts how many adapters actually changed versus failed — e.g. `[OK] Cloudflare DNS applied on 3 adapter(s), 0 failed`, or an `[ERROR]` when nothing changed (no active adapter, or not elevated). **OpenAsar** reports *which* backup of the original was saved, because antivirus / Controlled Folder Access often blocks the copy written into Discord's own folder while still allowing the one in `Documents\PerfTweaks_Backups`.
 - **Performance: a single `Win32PrioritySeparation` choice.** The two separate yes/no prompts ("set to 42?" then "reset to default 2?") are now one choice — `1` = 42, `2` = Windows default, `N` = leave unchanged. Answering yes to both was a confusing no-op, and the reset's per-value `.reg` undo file ended up snapshotting the just-set 42 instead of the true prior value; only one can apply now.
 - **Prefetch is no longer cleared.** Clearing `%SystemRoot%\Prefetch` is placebo — Windows rebuilds it and the next few launches just get slower — and it went against the script's own "what was excluded" stance. It's removed from the cleanup (and therefore from the recommended set and every preset) and is now listed on the **What was excluded** screen.
 - **Backup-folder manager (Backups & status).** New *Manage / open backup folder* item shows a per-category summary of `Documents\PerfTweaks_Backups` (how many per-value `.reg` undo files, full `HKLM`/`HKCU` exports and roughly how many MB they occupy, preset JSONs, hosts backups and logs), opens the folder in Explorer on request, and offers a safe one-shot prune of the **older full-registry exports** while always keeping the newest pair. The small per-value `.reg` backups and preset JSONs - the precise undo data - are never deleted. This reclaims the disk space those large exports accumulate without weakening reversibility.
@@ -202,7 +226,7 @@ Newest first. Feature details live in the sections above — this is just what c
 
 ## Notes & caveats
 
-- **Run as administrator.** HKLM changes, services, scheduled tasks, BCD edits, and restore points all need elevation. The script elevates itself; just approve UAC.
+- **Run as administrator.** HKLM changes, services, scheduled tasks, BCD edits, and restore points all need elevation. The script elevates itself; approve UAC for the full toolset. If you continue in limited mode after declining UAC, expect `[WARN]` on privileged actions — that is intentional honesty, not a bug.
 - **Backups go to your Documents.** They are written under the account that is elevated. On a normal single-admin PC (UAC consent prompt) that is your own Documents folder; if you elevate with a *different* administrator account, the backups land in that account's Documents instead.
 - **A reboot is recommended** after several tweaks (memory compression, mitigations, NVMe flags, boot timers, timer resolution) for them to fully take effect.
 - **Brief minimized windows.** Some actions (DNS, Store re-register, OpenAsar download, restore point, the status screen) run PowerShell in a short-lived minimized window so the main window's font/colors are not disturbed. The flicker is normal.
@@ -221,13 +245,21 @@ The in-app **`11. What was excluded`** screen lists, by category, the popular "t
 
 ## Tests
 
-Sincript ships with a small **static-analysis** harness in `tests/`. `PerfTweaks.cmd` is interactive and changes the system, so it can't be safely unit-tested by *running* it; instead `tests/Run-Tests.ps1` checks the script's text for invariants that tend to break silently — every `goto`/`call` resolves to a real label, no unescaped parenthesis ends a `( )` block early (a small cmd parser simulation; that class of bug crashed the hosts restore), no duplicate `boot.config` keys, `example.preset` matching the in-script validator, and each of the reliability fixes above staying in place. It needs nothing extra (stock Windows PowerShell 5.1, no Pester):
+Sincript ships with a **static-analysis** harness in `tests/`. `PerfTweaks.cmd` is interactive and changes the system, so it can't be safely unit-tested by *running* it; instead `tests/Run-Tests.ps1` (28 checks on stock Windows PowerShell 5.1 — no Pester) parses the script text for invariants that tend to break silently, including:
+
+- every menu `goto` / `call` resolves to a real label
+- no unescaped `)` inside a `( )` block (cmd parser simulation — that class of bug crashed the hosts restore)
+- no duplicate `boot.config` keys; `example.preset` keys match the in-script validator
+- honest reporting (`:Summary`, `_FAILS`, elevation gating, DNS/OpenAsar/backup guards) does not regress
+- backup undo integrity (quote escaping, collision-resistant filenames, hosts backup-before-overwrite)
+
+Run from the repository root:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 ```
 
-Exit code `0` means every check passed; `1` means at least one failed, with the offending detail printed. See `tests/README.md` for the full list of checks.
+Exit code `0` means all 28 checks passed; `1` means at least one failed, with the offending detail printed. See `tests/README.md` for the full numbered list.
 
 ---
 
