@@ -15,27 +15,44 @@ rem ---------- Self-elevate to Administrator (robust, cannot loop) ----------
 rem  net session needs the 'Server' service (often disabled by debloat scripts), so fall
 rem  back to fltmc, then to reg-querying the LocalService hive (needs no service at all).
 rem  The one-shot /elevated marker guarantees we relaunch at most once - no infinite loop.
+set "_ELEV="
 net session >nul 2>&1 || fltmc >nul 2>&1 || reg query "HKU\S-1-5-19" >nul 2>&1
-if not errorlevel 1 goto AdminOK
+if not errorlevel 1 ( set "_ELEV=1" & goto AdminOK )
 if /i "%~1"=="/elevated" goto AdminWarn
 echo Requesting Administrator privileges...
 powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs -WorkingDirectory (Split-Path -Parent '%~f0')" >nul 2>&1
 exit /b
 
 :AdminWarn
-echo [WARN] Could not auto-confirm administrator rights. Continuing anyway - some HKLM
-echo        changes may fail if this window is not actually elevated.
-timeout /t 3 >nul
+rem  Reached only when a relaunch already happened but we are STILL not elevated (UAC declined,
+rem  or all three admin probes are unavailable). Don't pretend HKLM writes will work: make the
+rem  limited state explicit, set _ELEV=0 so :Summary / actions report honestly, and let the user
+rem  opt in instead of silently continuing.
+set "_ELEV=0"
+echo.
+echo [WARN] Not running as Administrator. HKLM / service / boot / hosts changes WILL fail;
+echo        only per-user (HKCU) tweaks and the read-only status screens can work in this mode.
+echo        For the full toolset, close this window and use "Run as administrator".
+echo.
+set "_lc="
+set /p "_lc=Continue anyway in limited (per-user only) mode? (Y/N): "
+if /i not "%_lc%"=="Y" exit /b
 
 :AdminOK
+if not defined _ELEV set "_ELEV=1"
 cd /d "%~dp0" 2>nul
 rem ---------- Globals ----------
 set "SCRIPT_DIR=%~dp0"
+rem  Running tally of registry writes that FAILED since the last reset. :SafeRegAdd /
+rem  :SafeRegDelete bump it across their endlocal; :Summary reads it so an action's final
+rem  line reports the REAL outcome instead of an unconditional [OK].
+set "_FAILS=0"
 rem  Put backups under the user's Documents folder (resolves OneDrive-redirected Documents);
 rem  falls back to the profile default if the registry lookup fails.
 set "DOCS=%USERPROFILE%\Documents"
 for /f "tokens=2,*" %%a in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" /v Personal 2^>nul ^| findstr /I "Personal"') do set "DOCS=%%b"
 call set "DOCS=%DOCS%"
+if "!DOCS:~-1!"==" " set "DOCS=!DOCS:~0,-1!"
 set "BACKUP_DIR=%DOCS%\PerfTweaks_Backups"
 set "LOGFILE=%BACKUP_DIR%\PerfTweaks_%RANDOM%.log"
 if not exist "%BACKUP_DIR%" md "%BACKUP_DIR%" >nul 2>&1
@@ -282,7 +299,7 @@ echo ===========================================================================
 set /p "_c=Proceed? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
 call :DoCleanupCore
-set /p "_ev=Also clear ALL Event Viewer logs? (Y/N): "
+set /p "_ev=Also clear ALL Event Viewer logs, including the Security/audit log (irreversible)? (Y/N): "
 if /i not "%_ev%"=="Y" goto _clEvDone
 for /f "tokens=*" %%G in ('wevtutil el') do call :Run "wevtutil cl ""%%G"""
 
@@ -321,7 +338,7 @@ set /p "_c=Run DISM + SFC now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
 call :Run "dism /online /cleanup-image /restorehealth"
 call :Run "sfc /scannow"
-echo [OK] Integrity check complete.
+if "%_ELEV%"=="0" ( echo [WARN] Not elevated - DISM/SFC could not run. Re-run as Administrator. ) else ( echo [OK] DISM + SFC finished. Check the output above and the log for any files SFC could not repair. )
 pause
 goto MenuCleanup
 rem =====================================================================================
@@ -340,7 +357,7 @@ for %%S in (wuauserv bits cryptSvc msiserver appidsvc) do call :Run "net stop %%
 call :Run "ren ""%SystemRoot%\SoftwareDistribution"" SoftwareDistribution.bak_%RANDOM%"
 call :Run "ren ""%SystemRoot%\System32\catroot2"" catroot2.bak_%RANDOM%"
 for %%S in (wuauserv bits cryptSvc msiserver appidsvc) do call :Run "net start %%S"
-echo [OK] Windows Update components reset.
+if "%_ELEV%"=="0" ( echo [WARN] Not elevated - Windows Update reset could not run. Re-run as Administrator. ) else ( echo [OK] Windows Update reset finished. See the output above and the log for any errors. )
 pause
 goto MenuCleanup
 rem =====================================================================================
@@ -357,7 +374,7 @@ if /i not "%_c%"=="Y" goto MenuCleanup
 echo   ^> Re-registering Microsoft Store (separate window)...
 call :Log "EXEC-PS (isolated): Store re-register"
 start "" /min /wait powershell -NoProfile -Command "Get-AppxPackage -AllUsers Microsoft.WindowsStore | ForEach-Object {Add-AppxPackage -DisableDevelopmentMode -Register ($_.InstallLocation + '\AppXManifest.xml')}"
-echo [OK] Store re-registered.
+echo [OK] Store re-registration finished. If the Store still misbehaves, reboot and re-run.
 pause
 goto MenuCleanup
 rem =====================================================================================
@@ -375,7 +392,7 @@ if /i not "%_c%"=="Y" goto MenuCleanup
 call :Run "dism /online /cleanup-image /startcomponentcleanup"
 set /p "_co=Also compress OS binaries with CompactOS (slower, more space saved)? (Y/N): "
 if /i "%_co%"=="Y" call :Run "compact.exe /compactos:always"
-echo [OK] Done.
+if "%_ELEV%"=="0" ( echo [WARN] Not elevated - component cleanup could not run. Re-run as Administrator. ) else ( echo [OK] Component cleanup finished. See the output above and the log for details. )
 pause
 goto MenuCleanup
 rem =====================================================================================
@@ -391,6 +408,7 @@ echo  Legacy "memory optimization" values and CPU-mitigation changes are NOT her
 echo =====================================================================================
 set /p "_c=Apply performance tweaks? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
+set "_FAILS=0"
 call :DoPerformanceCore
 set "_q1=" & set "_q2=" & set "_q3=" & set "_q4=" & set "_q5=" & set "_q6=" & set "_q7="
 echo.
@@ -420,7 +438,7 @@ if /i "%_q6%"=="Y" call :SafeRegAdd "HKCU\Control Panel\Mouse" "MouseThreshold1"
 if /i "%_q6%"=="Y" call :SafeRegAdd "HKCU\Control Panel\Mouse" "MouseThreshold2" REG_SZ 0 "Mouse accel threshold2 off"
 set /p "_q7=  Show file extensions in Explorer (safer, see real file types)? (Y/N): "
 if /i "%_q7%"=="Y" call :SafeRegAdd "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt" REG_DWORD 0 "Show file extensions"
-echo [OK] Performance tweaks applied.
+call :Summary "Performance tweaks applied."
 pause
 goto MainMenu
 
@@ -456,13 +474,14 @@ echo  feedback prompts, activity feed and location; stops DiagTrack and CEIP tas
 echo =====================================================================================
 set /p "_c=Apply privacy / telemetry hardening? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
+set "_FAILS=0" & set "_RUNTRACK=1"
 call :DoPrivacyCore
 set /p "_svc=Also disable per-user sync services (breaks Mail/Calendar/People sync)? (Y/N): "
 if /i not "%_svc%"=="Y" goto _privSvcDone
 for %%S in (CDPUserSvc OneSyncSvc PimIndexMaintenanceSvc UnistoreSvc UserDataSvc MessagingService) do call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\%%S" "Start" REG_DWORD 4 "Disable per-user svc %%S"
 
 :_privSvcDone
-echo [OK] Privacy tweaks applied.
+call :Summary "Privacy tweaks applied."
 pause
 goto MainMenu
 
@@ -511,13 +530,14 @@ echo  monitor/standby/disk sleep timeouts to never. Best for a plugged-in deskto
 echo =====================================================================================
 set /p "_c=Apply high-performance power plan? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
+set "_FAILS=0" & set "_RUNTRACK=1"
 call :DoPowerCore
 set /p "_hb=Also disable hibernation (frees disk space, removes Fast Startup)? (Y/N): "
 if /i "%_hb%"=="Y" call :Run "powercfg /hibernate off"
 set "_mp="
-set /p "_mp=Set minimum processor state to 5%% (CPU idles down to save power, no FPS loss)? (Y/N): "
+set /p "_mp=Set minimum processor state to 5%% (CPU idles to save power, no FPS loss; no in-app undo - reset it under Windows Power Options)? (Y/N): "
 if /i "%_mp%"=="Y" call :SetMinProcState
-echo [OK] Power settings applied.
+call :Summary "Power settings applied."
 pause
 goto MainMenu
 
@@ -557,13 +577,14 @@ echo  Optionally disable Nagle / delayed-ACK on current adapters (lower latency)
 echo =====================================================================================
 set /p "_c=Apply TCP tweaks? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuNetwork
+set "_FAILS=0" & set "_RUNTRACK=1"
 call :DoNetworkCore
 set /p "_nag=Also disable Nagle/delayed-ACK on current adapters? (Y/N): "
 if /i not "%_nag%"=="Y" goto _netNagDone
 call :DoNagleOff
 
 :_netNagDone
-echo [OK] TCP tweaks applied.
+call :Summary "TCP tweaks applied."
 pause
 goto MenuNetwork
 
@@ -584,12 +605,13 @@ echo  Resets TCP/IP and Winsock, flushes DNS, releases/renews IP. Brief connecti
 echo =====================================================================================
 set /p "_c=Proceed? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuNetwork
+set "_FAILS=0" & set "_RUNTRACK=1"
 call :Run "ipconfig /flushdns"
 call :Run "netsh winsock reset"
 call :Run "netsh int ip reset"
 call :Run "ipconfig /release"
 call :Run "ipconfig /renew"
-echo [OK] Network stack reset. Reboot recommended.
+call :Summary "Network stack reset. Reboot recommended."
 pause
 goto MenuNetwork
 rem =====================================================================================
@@ -671,7 +693,8 @@ timeout /t 3 >nul
 set "_DONE=0"
 for %%F in (Discord DiscordPTB DiscordCanary) do if exist "%LocalAppData%\%%F\" call :InstallAsarInto "%LocalAppData%\%%F" "%%F" "%_SRC%"
 if "%_DONE%"=="0" (
-    echo [ERROR] No Discord install with a resources\app.asar found. ^(Store version unsupported.^)
+    echo [ERROR] No Discord install was updated. Either none has a resources\app.asar ^(Store
+    echo         version unsupported^), or Discord was still running - fully quit it and re-run.
     pause
     goto MenuApps
 )
@@ -803,7 +826,11 @@ rem  sitting next to it, so it keeps working no matter where Steam is installed.
 >>"!_STEAMDIR!\SteamLight.bat" echo start "" "%%~dp0steam.exe" !_SLFLAGS!
 call :Log "SteamLight written to !_STEAMDIR!\SteamLight.bat"
 echo   ^> Creating Desktop shortcut...
-start "" /min /wait powershell -NoProfile -Command "$d=[Environment]::GetFolderPath('Desktop'); $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut((Join-Path $d 'SteamLight.lnk')); $s.TargetPath=(Join-Path '!_STEAMDIR!' 'SteamLight.bat'); $s.WorkingDirectory='!_STEAMDIR!'; $s.WindowStyle=7; $s.IconLocation=((Join-Path '!_STEAMDIR!' 'steam.exe')+',0'); $s.Description='Launch Steam in lightweight mode'; $s.Save()"
+rem  Pass the Steam path via an env var (not interpolated into the PS string) so a path with an
+rem  apostrophe (e.g. C:\Users\O'Brien\Steam) can't break the single-quoted PS literals.
+set "PT_SLDIR=!_STEAMDIR!"
+start "" /min /wait powershell -NoProfile -Command "$sd=$env:PT_SLDIR; $d=[Environment]::GetFolderPath('Desktop'); $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut((Join-Path $d 'SteamLight.lnk')); $s.TargetPath=(Join-Path $sd 'SteamLight.bat'); $s.WorkingDirectory=$sd; $s.WindowStyle=7; $s.IconLocation=((Join-Path $sd 'steam.exe')+',0'); $s.Description='Launch Steam in lightweight mode'; $s.Save()"
+set "PT_SLDIR="
 call :Log "SteamLight desktop shortcut created"
 echo [OK] SteamLight installed in the Steam folder, and a shortcut was placed on your Desktop.
 echo      First launch restarts Steam, so it may take a moment.
@@ -823,10 +850,24 @@ set "_HOSTS=%SystemRoot%\System32\drivers\etc\hosts"
 call :RequireBundledFile hosts "ad/telemetry blocklist for the system hosts file"
 set /p "_c=Proceed? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuApps
+set "_hbak=0"
 if exist "%_HOSTS%" (
-    copy /y "%_HOSTS%" "%_HOSTS%.bak" >nul 2>&1
-    copy /y "%_HOSTS%" "%BACKUP_DIR%\hosts_%RANDOM%.bak" >nul 2>&1
-    call :Log "hosts backup made"
+    set "_hbakdoc=%BACKUP_DIR%\hosts_%RANDOM%.bak"
+    rem  Gate _hbak on the COPY's own exit code (&&), not on "if exist": a stale fixed-name
+    rem  hosts.bak from a prior run would otherwise satisfy the check and let this run overwrite
+    rem  with no fresh backup. The doc copy uses a random name, but && makes both checks honest.
+    copy /y "%_HOSTS%" "%_HOSTS%.bak" >nul 2>&1 && set "_hbak=1"
+    copy /y "%_HOSTS%" "!_hbakdoc!"  >nul 2>&1 && set "_hbak=1"
+    call :Log "hosts backup made (hbak=!_hbak!)"
+)
+if exist "%_HOSTS%" if "!_hbak!"=="0" (
+    echo.
+    echo [ERROR] Could not back up the current hosts file ^(AV / Controlled Folder Access / read-only^).
+    echo         Aborting so your existing hosts is NOT overwritten without a backup. Allow writes to
+    echo         hosts or the backup folder, then re-run this action.
+    call :Log "ABORT: hosts apply - no backup written, existing hosts left intact"
+    pause
+    goto MenuApps
 )
 copy /y "%SCRIPT_DIR%hosts" "%_HOSTS%" >nul
 if errorlevel 1 (
@@ -837,7 +878,7 @@ if errorlevel 1 (
     echo   file is read-only. Temporarily allow edits to hosts, then re-run this action.
     call :Log "FAIL: apply hosts -> %_HOSTS%"
 ) else (
-    echo [OK] hosts replaced. Backup at "%_HOSTS%.bak".
+    echo [OK] hosts replaced. The original is backed up ^(hosts.bak beside it, and/or the backup folder^).
     call :Log "OK: hosts applied from %SCRIPT_DIR%hosts"
     call :Run "ipconfig /flushdns"
 )
@@ -910,9 +951,10 @@ set /p "_rp=Create a restore point first? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
 set /p "_c=Disable mitigations now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
+set "_FAILS=0"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverride" REG_DWORD 3 "Disable CPU mitigations"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverrideMask" REG_DWORD 3 "Mitigations override mask"
-echo [OK] Mitigations disabled. REBOOT required.
+call :Summary "Mitigations disabled. REBOOT required."
 pause
 goto MenuAdvanced
 
@@ -920,9 +962,10 @@ goto MenuAdvanced
 cls
 call :Logo
 echo =====================  Re-enable CPU mitigations (secure)  ========================
+set "_FAILS=0"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverride" REG_DWORD 0 "Re-enable CPU mitigations"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverrideMask" REG_DWORD 3 "Mitigations override mask"
-echo [OK] Mitigations restored to secure default. REBOOT required.
+call :Summary "Mitigations restored to secure default. REBOOT required."
 pause
 goto MenuAdvanced
 rem =====================================================================================
@@ -938,11 +981,12 @@ echo  Can help timer-sensitive workloads. Reversible (option 4). REBOOT required
 echo =====================================================================================
 set /p "_c=Apply timer tweaks? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
+set "_FAILS=0" & set "_RUNTRACK=1"
 call :Run "bcdedit /deletevalue useplatformclock"
 call :Run "bcdedit /set useplatformtick yes"
 call :Run "bcdedit /set disabledynamictick yes"
 call :Run "bcdedit /set tscsyncpolicy enhanced"
-echo [OK] Timer tweaks applied. REBOOT required.
+call :Summary "Timer tweaks applied. REBOOT required."
 pause
 goto MenuAdvanced
 
@@ -950,11 +994,12 @@ goto MenuAdvanced
 cls
 call :Logo
 echo ============================  Revert BCDEdit timers  ==============================
+set "_FAILS=0" & set "_RUNTRACK=1"
 call :Run "bcdedit /deletevalue useplatformclock"
 call :Run "bcdedit /deletevalue useplatformtick"
 call :Run "bcdedit /deletevalue disabledynamictick"
 call :Run "bcdedit /deletevalue tscsyncpolicy"
-echo [OK] Timer settings reverted to defaults. REBOOT required.
+call :Summary "Timer settings reverted to defaults. REBOOT required."
 pause
 goto MenuAdvanced
 rem =====================================================================================
@@ -972,11 +1017,12 @@ set /p "_rp=Create a restore point first? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
 set /p "_c=Apply NVMe flags? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
+set "_FAILS=0"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides" "1176759950" REG_DWORD 1 "NVMe flag 1"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides" "1853569164" REG_DWORD 1 "NVMe flag 2"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides" "156965516" REG_DWORD 1 "NVMe flag 3"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides" "735209102" REG_DWORD 1 "NVMe flag 4"
-echo [OK] NVMe flags written. REBOOT required.
+call :Summary "NVMe flags written. REBOOT required."
 pause
 goto MenuAdvanced
 rem =====================================================================================
@@ -991,8 +1037,9 @@ echo  know you don't need IPv6. To revert, delete that value or set it to 0. REB
 echo =====================================================================================
 set /p "_c=Disable IPv6? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
+set "_FAILS=0"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" "DisabledComponents" REG_DWORD 255 "Disable IPv6 (0xFF)"
-echo [OK] IPv6 disabled. REBOOT required.
+call :Summary "IPv6 disabled. REBOOT required."
 pause
 goto MenuAdvanced
 rem =====================================================================================
@@ -1014,7 +1061,7 @@ echo   ^> Disabling memory compression and page combining...
 call :Log "EXEC-PS (isolated): Disable-MMAgent -MemoryCompression / -PageCombining"
 start "" /min /wait powershell -NoProfile -Command "try{Disable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue}catch{}; try{Disable-MMAgent -PageCombining -ErrorAction SilentlyContinue}catch{}"
 call :Log "Done: Disable-MMAgent"
-echo [OK] Done. REBOOT recommended.
+if "%_ELEV%"=="0" ( echo [WARN] Not elevated - memory compression was NOT changed. Re-run as Administrator. ) else ( echo [OK] Memory compression / page combining disabled. REBOOT to fully apply. )
 pause
 goto MenuAdvanced
 rem =====================================================================================
@@ -1035,6 +1082,7 @@ echo  Detected NVIDIA. Disables NVIDIA telemetry tasks and background reporting 
 echo  large undocumented GPU registry tweaks are NOT applied (they can cause crashes).
 set /p "_c=Apply NVIDIA telemetry-off? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
+set "_FAILS=0" & set "_RUNTRACK=1"
 call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport1_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
 call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport2_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
 call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport3_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
@@ -1043,7 +1091,7 @@ call :Run "schtasks /Change /Disable /TN ""NvTmMon_{B2FE1952-0186-46C3-BAEC-A80A
 call :Run "schtasks /Change /Disable /TN ""NvDriverUpdateCheckDaily_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\Startup" "SendTelemetryData" REG_DWORD 0 "NVIDIA telemetry off"
 call :SafeRegAdd "HKLM\SOFTWARE\NVIDIA Corporation\NvControlPanel2\Client" "OptInOrOutPreference" REG_DWORD 0 "NVIDIA opt-out"
-echo [OK] NVIDIA telemetry / tasks disabled.
+call :Summary "NVIDIA telemetry / tasks disabled."
 pause
 goto MenuAdvanced
 
@@ -1053,9 +1101,10 @@ echo  telemetry collection - by writing the opt-out to the registry, with a back
 echo  No bulk undocumented AMD register tweaks are applied; those can cause instability.
 set /p "_c=Apply AMD telemetry opt-out? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
+set "_FAILS=0"
 call :SafeRegAdd "HKLM\SOFTWARE\AMD\CN" "UserExperienceProgram" REG_DWORD 0 "AMD User Experience Program opt-out"
 echo.
-echo [OK] AMD User Experience Program opt-out written.
+call :Summary "AMD User Experience Program opt-out written."
 echo      AMD has no single guaranteed switch across driver versions, so to be sure also open
 echo      AMD Software ^> Settings ^> Preferences and turn OFF: AMD User Experience Program,
 echo      AMD Image Inspector, and Game Adjustment Tracking and Notifications.
@@ -1089,14 +1138,16 @@ if "%sel%"=="0" goto MenuAdvanced
 goto HagsToggle_ask
 
 :HagsOff
+set "_FAILS=0"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode" REG_DWORD 1 "HAGS off"
-echo [OK] HAGS set OFF. Reboot for the change to take effect.
+call :Summary "HAGS set OFF. Reboot for the change to take effect."
 pause
 goto MenuAdvanced
 
 :HagsOn
+set "_FAILS=0"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode" REG_DWORD 2 "HAGS on (default)"
-echo [OK] HAGS set ON (default). Reboot for the change to take effect.
+call :Summary "HAGS set ON (default). Reboot for the change to take effect."
 pause
 goto MenuAdvanced
 
@@ -1140,16 +1191,18 @@ if "!_pl!"=="3" (set "_plv=2" & set "_pln=Normal")
 if "!_pl!"=="4" (set "_plv=5" & set "_pln=Below normal")
 if "!_pl!"=="5" (set "_plv=1" & set "_pln=Low/Idle")
 if not defined _plv goto MenuAdvanced
+set "_FAILS=0"
 call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\!_exe!\PerfOptions" "CpuPriorityClass" REG_DWORD !_plv! "Priority !_pln! for !_exe!"
 echo.
-echo [OK] !_exe! priority set to !_pln!. Close and reopen the program for it to take effect.
+call :Summary "!_exe! priority set to !_pln!. Close and reopen the program for it to take effect."
 pause
 goto MenuAdvanced
 
 :_ppRemove
+set "_FAILS=0"
 call :SafeRegDelete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\!_exe!\PerfOptions" "CpuPriorityClass" "Remove priority override for !_exe!"
 echo.
-echo [OK] Priority override for !_exe! removed (back to Windows default).
+call :Summary "Priority override for !_exe! removed (back to Windows default)."
 pause
 goto MenuAdvanced
 rem =====================================================================================
@@ -1226,13 +1279,14 @@ set /p "_rp=Create a System Restore Point now? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
 set /p "_c=Proceed with the recommended set? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
+set "_FAILS=0"
 call :DoCleanupCore
 call :DoPrivacyCore
 call :DoPerformanceCore
 call :DoPowerCore
 call :DoNetworkCore
 echo.
-echo [OK] Recommended set applied. Reboot recommended.
+call :Summary "Recommended set applied. Reboot recommended."
 pause
 goto MainMenu
 rem =====================================================================================
@@ -1618,7 +1672,30 @@ set "_cmdlog=%_cmd:"=%"
 echo   ^> %_cmd%
 call :Log "EXEC: %_cmdlog%"
 cmd /s /c "%_cmd%" 1>>"%LOGFILE%" 2>>&1
-if errorlevel 1 ( call :Log "FAIL: %_cmdlog%" ) else ( call :Log "OK: %_cmdlog%" )
+if errorlevel 1 (
+    call :Log "FAIL: %_cmdlog%"
+    rem  Count as a REAL failure only when this is a tracked action AND we are not elevated - the
+    rem  command then definitely could not do its privileged work. When elevated, a nonzero exit is
+    rem  usually benign: service already stopped, bcd value unset, or task absent - so counting it
+    rem  would cry wolf. Best-effort callers like cleanup deletes never set _RUNTRACK.
+    if defined _RUNTRACK if "%_ELEV%"=="0" set /a _FAILS+=1
+) else ( call :Log "OK: %_cmdlog%" )
+goto :eof
+
+:Summary
+rem %1 = success phrase. Prints [OK] if no registry write failed since _FAILS was last reset,
+rem otherwise an honest [WARN] with the count. :SafeRegAdd / :SafeRegDelete keep _FAILS current
+rem across their endlocal, so this reflects the REAL outcome (e.g. not-elevated HKLM writes).
+if not defined _FAILS set "_FAILS=0"
+if not defined _ELEV set "_ELEV=1"
+if "%_FAILS%"=="0" (
+    echo [OK] %~1
+) else (
+    echo [WARN] %~1 -- %_FAILS% change^(s^) could NOT be applied. See the [FAIL] line^(s^) above.
+    if "%_ELEV%"=="0" ( echo        This window is NOT elevated - close it and use Run as administrator, then retry. ) else ( echo        This window is elevated, so those keys are protected or held by Windows. See the log. )
+)
+rem  Tracking is per-action: clear it here so a later untracked action (e.g. cleanup) can't inherit it.
+set "_RUNTRACK="
 goto :eof
 
 :ApplyDns
@@ -1683,7 +1760,10 @@ rem  ----- manual mode: back up ONLY this single value to its own .reg file ----
 set "_safe=!_key:\=_!"
 set "_safe=!_safe::=!"
 set "_safe=!_safe: =_!"
-set "_bkp=%BACKUP_DIR%\!_safe!_%RANDOM%.reg"
+rem  %RANDOM%%RANDOM% (30-bit) instead of one %RANDOM%: two values under the same key share
+rem  !_safe!, so a single 15-bit %RANDOM% could birthday-collide within one apply pass and one
+rem  value's .reg backup would overwrite another's - losing that value's per-value undo.
+set "_bkp=%BACKUP_DIR%\!_safe!_%RANDOM%%RANDOM%.reg"
 rem  expand the hive short name to the full name a .reg file requires
 set "_rk=!_key!"
 set "_rk=!_rk:HKLM\=HKEY_LOCAL_MACHINE\!"
@@ -1703,10 +1783,12 @@ call :BackupValueJson
 
 :_sraApply
 call :Log "REGADD !_key! !_val!=!_data! (!_desc!)"
+set "_rc=0"
 reg add "!_key!" /v "!_val!" /t !_type! /d "!_data!" /f >nul 2>&1
-if errorlevel 1 ( call :Log "  FAIL regadd !_key! !_val!" ) else ( call :Log "  OK regadd !_key! !_val!" )
-endlocal
-goto :eof
+if errorlevel 1 set "_rc=1"
+if "!_rc!"=="1" echo         [FAIL] "!_desc!" was NOT applied - run as Administrator, or the key is protected.
+if "!_rc!"=="1" ( call :Log "  FAIL regadd !_key! !_val!" ) else ( call :Log "  OK regadd !_key! !_val!" )
+endlocal & set /a _FAILS+=%_rc% & exit /b %_rc%
 
 :SafeRegDelete
 rem %1=Key %2=Value %3=Description. Backs up the single value (same as SafeRegAdd), then deletes it.
@@ -1722,7 +1804,7 @@ if defined PRESET_MODE goto _srdJson
 set "_safe=!_key:\=_!"
 set "_safe=!_safe::=!"
 set "_safe=!_safe: =_!"
-set "_bkp=%BACKUP_DIR%\!_safe!_%RANDOM%.reg"
+set "_bkp=%BACKUP_DIR%\!_safe!_%RANDOM%%RANDOM%.reg"
 set "_rk=!_key!"
 set "_rk=!_rk:HKLM\=HKEY_LOCAL_MACHINE\!"
 set "_rk=!_rk:HKCU\=HKEY_CURRENT_USER\!"
@@ -1740,10 +1822,12 @@ call :BackupValueJson
 
 :_srdApply
 call :Log "REGDEL !_key! !_val! (!_desc!)"
+set "_rc=0"
 reg delete "!_key!" /v "!_val!" /f >nul 2>&1
-if errorlevel 1 ( call :Log "  FAIL regdel !_key! !_val!" ) else ( call :Log "  OK regdel !_key! !_val!" )
-endlocal
-goto :eof
+if errorlevel 1 set "_rc=1"
+if "!_rc!"=="1" echo         [FAIL] "!_desc!" was NOT applied - run as Administrator, or the key is protected.
+if "!_rc!"=="1" ( call :Log "  FAIL regdel !_key! !_val!" ) else ( call :Log "  OK regdel !_key! !_val!" )
+endlocal & set /a _FAILS+=%_rc% & exit /b %_rc%
 
 :BackupValueLine
 rem  appends the prior state of ONE value to !_bkp! (runs inside SafeRegAdd's setlocal scope)
@@ -1752,6 +1836,7 @@ if not defined _ln (
     goto :eof
 )
 set "_td=REG_!_ln:*REG_=!"
+set "_rd="
 for /f "tokens=1,*" %%a in ("!_td!") do ( set "_rt=%%a" & set "_rd=%%b" )
 if /i "!_rt!"=="REG_DWORD" (
     set "_hx=0000000!_rd:~2!"
@@ -1759,7 +1844,11 @@ if /i "!_rt!"=="REG_DWORD" (
     goto :eof
 )
 if /i "!_rt!"=="REG_SZ" (
-    set "_sd=!_rd:\=\\!"
+    rem  guard on "defined _rd": an EMPTY REG_SZ leaves _rd undefined, and !_rd:...! on an
+    rem  undefined var returns the literal pattern (\=\\) - which would corrupt the .reg.
+    set "_sd="
+    if defined _rd set "_sd=!_rd:\=\\!"
+    if defined _rd set "_sd=!_sd:"=\"!"
     >>"!_bkp!" echo "!_val!"="!_sd!"
     goto :eof
 )
@@ -1807,9 +1896,17 @@ set "_base=%~1"
 set "_flav=%~2"
 set "_src=%~3"
 set "_res="
-for /f "delims=" %%A in ('dir /b /ad /o-n "%_base%\app-*" 2^>nul') do (
-    if not defined _res if exist "%_base%\%%A\resources\" set "_res=%_base%\%%A\resources"
-)
+rem  Pick the HIGHEST-version app-* folder that has a resources\ dir. A plain ASCII "dir /o-n"
+rem  sort is wrong at a version digit-rollover (app-1.0.9500 sorts ABOVE app-1.0.10015), which
+rem  targeted the OLD build the launcher no longer runs. Version-aware sort via PowerShell.
+set "PT_OABASE=%_base%"
+set "_oares=%TEMP%\pt_oares_%RANDOM%.txt"
+del "%_oares%" >nul 2>&1
+set "PT_OARES=%_oares%"
+start "" /min /wait powershell -NoProfile -Command "$b=$env:PT_OABASE;$d=Get-ChildItem -LiteralPath $b -Directory -Filter 'app-*' -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'resources') } | Sort-Object { try{[version]($_.Name -replace '^app-','')}catch{[version]'0.0'} } -Descending | Select-Object -First 1; if($d){ (Join-Path $d.FullName 'resources') | Out-File -FilePath $env:PT_OARES -Encoding ASCII }"
+set "PT_OABASE=" & set "PT_OARES="
+if exist "%_oares%" for /f "usebackq delims=" %%A in ("%_oares%") do set "_res=%%A"
+del "%_oares%" >nul 2>&1
 if not defined _res ( echo [SKIP] %_flav%: no app-*\resources folder. & endlocal & goto :eof )
 set "_target=app.asar"
 if exist "%_res%\_app.asar"     set "_target=_app.asar"
@@ -1888,6 +1985,9 @@ rem ---------- preset capture helpers ----------
 :PresetBegin
 rem %1 = preset label used in the backup filename
 set "_pname=%~1"
+rem  Reset the failure tally so each preset's :Summary reflects only THIS preset's registry writes.
+rem  (Not tracking _RUNTRACK here: presets also run cleanup deletes, whose failures are benign.)
+set "_FAILS=0"
 set "PRESET_JSON=%BACKUP_DIR%\Preset_%_pname%_%RANDOM%%RANDOM%.json"
 set "PRESET_JSON_TMP=%PRESET_JSON%.tmp"
 break>"%PRESET_JSON_TMP%"
@@ -2076,8 +2176,8 @@ call :DoNetworkCore
 call :PresetDnsChoice
 call :PresetEnd
 echo.
-echo [OK] LIGHT preset applied. Registry backup:
-echo      %PRESET_LAST%
+call :Summary "LIGHT preset applied."
+echo      Registry backup: %PRESET_LAST%
 echo      Reboot recommended.
 pause
 goto MenuPresets
@@ -2106,8 +2206,8 @@ call :DoPowerCore
 call :DoNetworkCore
 call :PresetEnd
 echo.
-echo [OK] MODERATE preset applied. Registry backup:
-echo      %PRESET_LAST%
+call :Summary "MODERATE preset applied."
+echo      Registry backup: %PRESET_LAST%
 echo.
 set "_oa="
 set /p "_oa=Also install OpenAsar into Discord now? (Y/N): "
@@ -2156,8 +2256,8 @@ call :DoMemCompressOff
 call :PresetDnsChoice
 call :PresetEnd
 echo.
-echo [OK] HEAVY preset applied. Registry backup:
-echo      %PRESET_LAST%
+call :Summary "HEAVY preset applied."
+echo      Registry backup: %PRESET_LAST%
 echo      REBOOT required for the timer / IPv6 / memory-compression changes to take hold.
 echo.
 echo  Tip: to also enable a higher timer resolution, use  Apps ^& files ^> Apply timer
@@ -2273,8 +2373,8 @@ if defined _P_OPENASAR    call :DoOpenAsarSilent
 if defined _P_DNS         call :PresetDnsByName "%_P_DNS%"
 call :PresetEnd
 echo.
-echo [OK] Custom preset "%_pshow%" applied. Registry backup:
-echo      %PRESET_LAST%
+call :Summary "Custom preset applied."
+echo      Registry backup: %PRESET_LAST%
 echo      Reboot recommended.
 pause
 goto MenuPresets
@@ -2285,7 +2385,7 @@ set "_k=%~1"
 set "_v=%~2"
 if not defined _k goto :eof
 if "%_k:~0,1%"==";" goto :eof
-if "%_v:~-1%"==" " set "_v=%_v:~0,-1%"
+if defined _v if "!_v:~-1!"==" " set "_v=!_v:~0,-1!"
 set "_match="
 if /i "%_k%"=="cleanup"               ( set "_match=1" & call :PVok CLEANUP "%_v%" 1 )
 if /i "%_k%"=="privacy"               ( set "_match=1" & call :PVok PRIVACY "%_v%" 1 )
@@ -2382,10 +2482,29 @@ set /p "_cc=Proceed with the restore? (Y/N): "
 if /i not "%_cc%"=="Y" goto MenuBackups
 call :Log "PRESET restore from %_rfile%"
 set "PT_FILE=%_rfile%"
-start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue';$p=$env:PT_FILE;try{$items=Get-Content -Raw -LiteralPath $p | ConvertFrom-Json}catch{exit 1};foreach($it in $items){ if(-not $it.present){ reg delete $it.key /v $it.name /f | Out-Null } elseif($it.oldtype -eq 'REG_DWORD' -or $it.oldtype -eq 'REG_SZ'){ reg add $it.key /v $it.name /t $it.oldtype /d $it.olddata /f | Out-Null } }"
-set "PT_FILE="
+set "_prres=%TEMP%\pt_prres_%RANDOM%.txt"
+del "%_prres%" >nul 2>&1
+set "PT_PRRES=%_prres%"
+rem  Child counts restored/failed values (an already-absent delete counts as success) and writes
+rem  "ok fail badjson" so the batch can report the REAL outcome instead of an unconditional [OK].
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue';$p=$env:PT_FILE;$ok=0;$fail=0;try{$items=Get-Content -Raw -LiteralPath $p | ConvertFrom-Json}catch{'0 0 1'|Out-File -FilePath $env:PT_PRRES -Encoding ASCII;exit 2};foreach($it in $items){ if(-not $it.present){ reg delete $it.key /v $it.name /f 2>$null | Out-Null; if($LASTEXITCODE -eq 0){$ok++}else{ reg query $it.key /v $it.name 2>$null | Out-Null; if($LASTEXITCODE -ne 0){$ok++}else{$fail++} } } elseif($it.oldtype -eq 'REG_DWORD'){ reg add $it.key /v $it.name /t REG_DWORD /d $it.olddata /f 2>$null | Out-Null; if($LASTEXITCODE -eq 0){$ok++}else{$fail++} } elseif($it.oldtype -eq 'REG_SZ'){ $rk=$it.key -replace '^HKLM\\','HKLM:\' -replace '^HKCU\\','HKCU:\' -replace '^HKCR\\','Registry::HKEY_CLASSES_ROOT\' -replace '^HKU\\','Registry::HKEY_USERS\' -replace '^HKCC\\','Registry::HKEY_CURRENT_CONFIG\'; try{ if(-not (Test-Path -LiteralPath $rk)){New-Item -Path $rk -Force -ErrorAction Stop|Out-Null}; Set-ItemProperty -LiteralPath $rk -Name $it.name -Value ([string]$it.olddata) -Type String -ErrorAction Stop; $ok++ }catch{$fail++} } }; (''+$ok+' '+$fail+' 0')|Out-File -FilePath $env:PT_PRRES -Encoding ASCII; if($fail -gt 0){exit 1}else{exit 0}"
+set "_prrc=%errorlevel%"
+set "PT_FILE=" & set "PT_PRRES="
+set "_okN=0" & set "_failN=0" & set "_badjson=0"
+if exist "%_prres%" for /f "usebackq tokens=1,2,3" %%a in ("%_prres%") do ( set "_okN=%%a" & set "_failN=%%b" & set "_badjson=%%c" )
+del "%_prres%" >nul 2>&1
 echo.
-echo [OK] Restore finished (registry values). A reboot is recommended.
+if "!_badjson!"=="1" (
+    echo [ERROR] That backup file could not be read as valid JSON. Nothing was changed.
+    call :Log "FAIL: preset restore - bad JSON %_rfile%"
+) else if "!_prrc!"=="0" (
+    echo [OK] Restore finished: !_okN! value^(s^) put back, 0 failed. A reboot is recommended.
+    call :Log "OK: preset restore ok=!_okN! fail=!_failN!"
+) else (
+    echo [WARN] Restore incomplete: !_okN! restored, !_failN! FAILED ^(not elevated, or a protected key^).
+    echo        Re-run elevated if HKLM values did not restore. Details are in the log.
+    call :Log "FAIL: preset restore ok=!_okN! fail=!_failN!"
+)
 echo      Reminder: revert DNS, power plan and BCD timers from their own menu items if needed.
 pause
 goto MenuBackups
@@ -2525,6 +2644,7 @@ set "_jk=!_key:\=\\!"
 set "_jv=!_val:\=\\!"
 if not defined _ln goto _bvjAbsent
 set "_td=REG_!_ln:*REG_=!"
+set "_rd="
 for /f "tokens=1,*" %%a in ("!_td!") do ( set "_rt=%%a" & set "_rd=%%b" )
 if /i "!_rt!"=="REG_DWORD" goto _bvjDword
 if /i "!_rt!"=="REG_SZ" goto _bvjSz
@@ -2540,7 +2660,13 @@ goto :eof
 goto :eof
 
 :_bvjSz
-set "_sz=!_rd:"=!"
-set "_sz=!_sz:\=\\!"
+rem  escape for JSON: backslash first (\ -> \\), THEN quote (" -> \"). The old code STRIPPED
+rem  quotes, silently losing any " in the prior REG_SZ data so the restore wrote wrong data.
+rem  Guard on "defined _rd": an EMPTY REG_SZ leaves _rd undefined, and !_rd:...! on an undefined
+rem  var returns the literal pattern (\=\\), which is INVALID JSON and breaks ConvertFrom-Json for
+rem  the whole preset backup. Empty -> "" (valid).
+set "_sz="
+if defined _rd set "_sz=!_rd:\=\\!"
+if defined _rd set "_sz=!_sz:"=\"!"
 >>"!PRESET_JSON_TMP!" echo {"key":"!_jk!","name":"!_jv!","present":true,"oldtype":"REG_SZ","olddata":"!_sz!"}
 goto :eof
