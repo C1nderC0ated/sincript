@@ -6,19 +6,19 @@ A single, menu-driven batch script (`PerfTweaks.cmd`) that applies a **curated, 
 
 Everything is opt-in from a menu, every registry change is backed up before it is made, and the script can create a System Restore Point and a full registry export on request. There is no silent "apply everything" — you choose what runs.
 
-The **runtime** is a single self-contained `PerfTweaks.cmd` (no installer, no extra dependencies). This repository also ships optional bundled inputs, an example custom preset, and a developer test harness — see [Repository contents](#repository-contents) below.
+The **runtime** is a single self-contained `PerfTweaks.cmd` (no installer, no extra dependencies). The release also ships optional bundled inputs, an example custom preset, and a developer test harness — see [Repository contents](#repository-contents) below.
 
 ---
 
-## Repository contents
+## Release contents
 
 | Path | Role |
 |------|------|
 | `PerfTweaks.cmd` | The tool — copy this anywhere you want to run it |
+| `SetTimerResolution.exe` | Optional timer-resolution helper for the action |
 | `boot.config`, `hosts` | Optional inputs for the Unity and hosts actions (place next to the script) |
 | `sincript_presets/` | Folder for custom `.preset` files; includes `example.preset` |
 | `tests/` | Static-analysis harness (`Run-Tests.ps1`) — for development/CI, not needed on end-user PCs |
-| `README_sincript.md` | This documentation |
 
 ---
 
