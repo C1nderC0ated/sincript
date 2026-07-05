@@ -1470,7 +1470,6 @@ echo.
 echo Done. Any removed app can be reinstalled later from the Microsoft Store.
 pause
 goto MenuApps
-
 rem =====================================================================================
 rem  ACTION: Manage startup programs (the reversible Task Manager switch, with backups)
 rem =====================================================================================
@@ -1574,6 +1573,7 @@ start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='Sile
 set "_swrc=%errorlevel%"
 set "PT_SU_MODE=" & set "PT_SU_IDX=" & set "PT_SU_LIST=" & set "PT_SU_RES=" & set "PT_SU_BAK="
 exit /b %_swrc%
+
 :RequireBundledFile
 rem %1 = filename beside PerfTweaks.cmd   %2 = short description for messages/log
 set "_bundled=%SCRIPT_DIR%%~1"
