@@ -296,9 +296,11 @@ echo ================================  CLEANUP  ================================
 echo  Deletes temp files, Windows logs, the thumbnail cache and telemetry caches, then
 echo  flushes the DNS cache. Only files are removed; nothing is changed in the registry.
 echo =====================================================================================
+set "_c="
 set /p "_c=Proceed? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
 call :DoCleanupCore
+set "_ev="
 set /p "_ev=Also clear ALL Event Viewer logs, including the Security/audit log (irreversible)? (Y/N): "
 if /i not "%_ev%"=="Y" goto _clEvDone
 for /f "tokens=*" %%G in ('wevtutil el') do call :Run "wevtutil cl ""%%G"""
@@ -334,6 +336,7 @@ echo =============================  DISM + SFC integrity  ======================
 echo  Repairs the component store (DISM RestoreHealth) then verifies system files (SFC).
 echo  Takes several minutes; let it finish.
 echo =====================================================================================
+set "_c="
 set /p "_c=Run DISM + SFC now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
 call :Run "dism /online /cleanup-image /restorehealth"
@@ -351,6 +354,7 @@ echo =======================  Reset Windows Update components  =================
 echo  Stops update services, renames SoftwareDistribution and catroot2, restarts them.
 echo  Fixes most stuck-update problems. Safe.
 echo =====================================================================================
+set "_c="
 set /p "_c=Reset Windows Update now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
 for %%S in (wuauserv bits cryptSvc msiserver appidsvc) do call :Run "net stop %%S"
@@ -369,6 +373,7 @@ call :Logo
 echo =====================  Re-register Microsoft Store / apps  ========================
 echo  Re-registers the Store package for the current user. Fixes a broken Store.
 echo =====================================================================================
+set "_c="
 set /p "_c=Re-register the Store now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
 echo   ^> Re-registering Microsoft Store (separate window)...
@@ -387,9 +392,11 @@ echo ===============================  Compact WinSxS  ==========================
 echo  Removes superseded component-store versions via the supported DISM method, then
 echo  optionally compresses system binaries (CompactOS). Frees disk space; reversible.
 echo =====================================================================================
+set "_c="
 set /p "_c=Run component cleanup now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
 call :Run "dism /online /cleanup-image /startcomponentcleanup"
+set "_co="
 set /p "_co=Also compress OS binaries with CompactOS (slower, more space saved)? (Y/N): "
 if /i "%_co%"=="Y" call :Run "compact.exe /compactos:always"
 if "%_ELEV%"=="0" ( echo [WARN] Not elevated - component cleanup could not run. Re-run as Administrator. ) else ( echo [OK] Component cleanup finished. See the output above and the log for details. )
@@ -406,6 +413,7 @@ echo  GameDVR off, gaming MMCSS priorities, faster startup/menus/shutdown, best-
 echo  visuals, long-path support, Explorer opens "This PC", unhide core-parking options.
 echo  Legacy "memory optimization" values and CPU-mitigation changes are NOT here (Advanced).
 echo =====================================================================================
+set "_c="
 set /p "_c=Apply performance tweaks? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
 set "_FAILS=0"
@@ -472,10 +480,12 @@ echo =============================  PRIVACY ^& TELEMETRY  ======================
 echo  Disables diagnostic telemetry, advertising ID, suggested apps, Cortana/web search,
 echo  feedback prompts, activity feed and location; stops DiagTrack and CEIP tasks.
 echo =====================================================================================
+set "_c="
 set /p "_c=Apply privacy / telemetry hardening? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
 set "_FAILS=0" & set "_RUNTRACK=1"
 call :DoPrivacyCore
+set "_svc="
 set /p "_svc=Also disable per-user sync services (breaks Mail/Calendar/People sync)? (Y/N): "
 if /i not "%_svc%"=="Y" goto _privSvcDone
 for %%S in (CDPUserSvc OneSyncSvc PimIndexMaintenanceSvc UnistoreSvc UserDataSvc MessagingService) do call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\%%S" "Start" REG_DWORD 4 "Disable per-user svc %%S"
@@ -528,10 +538,12 @@ echo ================================  POWER PLAN  =============================
 echo  Activates the Ultimate Performance plan (falls back to High Performance) and sets
 echo  monitor/standby/disk sleep timeouts to never. Best for a plugged-in desktop.
 echo =====================================================================================
+set "_c="
 set /p "_c=Apply high-performance power plan? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
 set "_FAILS=0" & set "_RUNTRACK=1"
 call :DoPowerCore
+set "_hb="
 set /p "_hb=Also disable hibernation (frees disk space, removes Fast Startup)? (Y/N): "
 if /i "%_hb%"=="Y" call :Run "powercfg /hibernate off"
 set "_mp="
@@ -575,10 +587,12 @@ echo ==============================  APPLY TCP TWEAKS  =========================
 echo  Receive-side autotuning = normal, heuristics off, RSS on, RSC on (sane defaults).
 echo  Optionally disable Nagle / delayed-ACK on current adapters (lower latency).
 echo =====================================================================================
+set "_c="
 set /p "_c=Apply TCP tweaks? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuNetwork
 set "_FAILS=0" & set "_RUNTRACK=1"
 call :DoNetworkCore
+set "_nag="
 set /p "_nag=Also disable Nagle/delayed-ACK on current adapters? (Y/N): "
 if /i not "%_nag%"=="Y" goto _netNagDone
 call :DoNagleOff
@@ -603,6 +617,7 @@ call :Logo
 echo ============================  Reset network stack  ================================
 echo  Resets TCP/IP and Winsock, flushes DNS, releases/renews IP. Brief connectivity loss.
 echo =====================================================================================
+set "_c="
 set /p "_c=Proceed? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuNetwork
 set "_FAILS=0" & set "_RUNTRACK=1"
@@ -672,6 +687,7 @@ set "_SRC="
 if exist "%SCRIPT_DIR%app.asar" set "_SRC=%SCRIPT_DIR%app.asar"
 if defined _SRC goto OA_HaveSrc
 echo Local app.asar not found next to this script.
+set "_dl="
 set /p "_dl=Download the latest OpenAsar (nightly) from GitHub instead? (Y/N): "
 if /i not "%_dl%"=="Y" goto MenuApps
 echo Downloading OpenAsar nightly...
@@ -684,6 +700,7 @@ if not exist "%TEMP%\openasar_nightly.asar" goto OA_DlFail
 set "_SRC=%TEMP%\openasar_nightly.asar"
 
 :OA_HaveSrc
+set "_c="
 set /p "_c=Close Discord and continue? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuApps
 taskkill /f /im Discord.exe       >nul 2>&1
@@ -824,6 +841,13 @@ rem  sitting next to it, so it keeps working no matter where Steam is installed.
 > "!_STEAMDIR!\SteamLight.bat" echo @echo off
 >>"!_STEAMDIR!\SteamLight.bat" echo taskkill /f /im steam.exe ^>nul 2^>^&1
 >>"!_STEAMDIR!\SteamLight.bat" echo start "" "%%~dp0steam.exe" !_SLFLAGS!
+if exist "!_STEAMDIR!\SteamLight.bat" goto _slWritten
+echo [ERROR] Could not write SteamLight.bat into the Steam folder - is it writable? Try running as administrator.
+call :Log "FAIL: SteamLight.bat could not be written to !_STEAMDIR!"
+pause
+goto MenuApps
+
+:_slWritten
 call :Log "SteamLight written to !_STEAMDIR!\SteamLight.bat"
 echo   ^> Creating Desktop shortcut...
 rem  Pass the Steam path via an env var (not interpolated into the PS string) so a path with an
@@ -848,6 +872,7 @@ echo  The current hosts is backed up next to it AND into the backup folder. DNS 
 echo =====================================================================================
 set "_HOSTS=%SystemRoot%\System32\drivers\etc\hosts"
 call :RequireBundledFile hosts "ad/telemetry blocklist for the system hosts file"
+set "_c="
 set /p "_c=Proceed? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuApps
 set "_hbak=0"
@@ -947,8 +972,10 @@ echo  Can improve CPU performance but REDUCES security. Reversible (option 2).
 echo  Downfall/GDS has no separate switch (microcode-driven); this is the broadest
 echo  documented override. Verify after reboot: PowerShell ^> Get-SpeculationControlSettings
 echo =====================================================================================
+set "_rp=Y"
 set /p "_rp=Create a restore point first? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
+set "_c="
 set /p "_c=Disable mitigations now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
 set "_FAILS=0"
@@ -979,6 +1006,7 @@ echo  Removes the forced platform clock, forces the platform tick, disables dyna
 echo  and sets TSC sync = enhanced (the BCD timer combo from the optimization guide).
 echo  Can help timer-sensitive workloads. Reversible (option 4). REBOOT required.
 echo =====================================================================================
+set "_c="
 set /p "_c=Apply timer tweaks? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
 set "_FAILS=0" & set "_RUNTRACK=1"
@@ -1013,8 +1041,10 @@ echo  Toggles feature flags for Microsoft's in-box NVMe driver (StorNVMe). NOTE:
 echo  blocked these on fully-patched systems in 2026, so on an updated PC this likely does
 echo  nothing now. Only relevant if your SSD uses the in-box driver. Harmless + reversible.
 echo =====================================================================================
+set "_rp=Y"
 set /p "_rp=Create a restore point first? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
+set "_c="
 set /p "_c=Apply NVMe flags? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
 set "_FAILS=0"
@@ -1035,6 +1065,7 @@ echo ===============================  Disable IPv6  ============================
 echo  Sets DisabledComponents=0xFF (disables IPv6 on all interfaces). Do this only if you
 echo  know you don't need IPv6. To revert, delete that value or set it to 0. REBOOT needed.
 echo =====================================================================================
+set "_c="
 set /p "_c=Disable IPv6? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
 set "_FAILS=0"
@@ -1052,6 +1083,7 @@ echo =====================  Disable memory compression / combining  ============
 echo  Turns off RAM compression and page combining. Frees a little CPU at the cost of more
 echo  RAM pressure on low-memory PCs. Re-enable: PowerShell ^> Enable-MMAgent -MemoryCompression
 echo =====================================================================================
+set "_c="
 set /p "_c=Disable memory compression and page combining? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
 rem  Launch PowerShell in a SEPARATE minimized window. Running powershell inside THIS
@@ -1080,6 +1112,7 @@ goto MenuAdvanced
 :GpuNvidia
 echo  Detected NVIDIA. Disables NVIDIA telemetry tasks and background reporting only. The
 echo  large undocumented GPU registry tweaks are NOT applied (they can cause crashes).
+set "_c="
 set /p "_c=Apply NVIDIA telemetry-off? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
 set "_FAILS=0" & set "_RUNTRACK=1"
@@ -1099,6 +1132,7 @@ goto MenuAdvanced
 echo  Detected AMD. This opts you out of the AMD User Experience Program - AMD's usage-data /
 echo  telemetry collection - by writing the opt-out to the registry, with a backup (reversible).
 echo  No bulk undocumented AMD register tweaks are applied; those can cause instability.
+set "_c="
 set /p "_c=Apply AMD telemetry opt-out? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
 set "_FAILS=0"
@@ -1275,8 +1309,10 @@ echo =========================  Apply recommended safe set  ====================
 echo  Runs Cleanup + Privacy + Performance + Power + Network core tweaks with no prompts.
 echo  Optional/risky items are NOT included. A restore point first is strongly advised.
 echo =====================================================================================
+set "_rp=Y"
 set /p "_rp=Create a System Restore Point now? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
+set "_c="
 set /p "_c=Proceed with the recommended set? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
 set "_FAILS=0"
@@ -1755,6 +1791,19 @@ set "_desc=%~5"
 echo   [REG] !_desc!
 set "_ln="
 for /f "delims=" %%L in ('reg query "!_key!" /v "!_val!" 2^>nul ^| findstr /I /C:"REG_"') do set "_ln=%%L"
+rem  Idempotence (DWORD): if the value already equals the target, skip the backup +
+rem  write. A redundant re-apply would otherwise snapshot the already-tweaked value
+rem  as its "prior" state and bury this value's true-original per-value undo.
+if not defined _ln goto _sraDoWrite
+if /i not "!_type!"=="REG_DWORD" goto _sraDoWrite
+for %%a in (!_ln!) do set "_curtok=%%a"
+set /a _curdec=_curtok 2>nul
+set /a _tgtdec=_data 2>nul
+if not "!_curdec!"=="!_tgtdec!" goto _sraDoWrite
+echo   [SKIP] !_desc! - already set.
+endlocal & goto :eof
+
+:_sraDoWrite
 if defined PRESET_MODE goto _sraJson
 rem  ----- manual mode: back up ONLY this single value to its own .reg file -----
 set "_safe=!_key:\=_!"
@@ -2192,7 +2241,7 @@ echo  Applies the recommended safe set - cleanup, privacy, performance, power an
 echo  core tweaks - then offers to install OpenAsar. Registry changes go into ONE JSON
 echo  backup. This is the same set as "Apply recommended safe set", plus OpenAsar.
 echo =====================================================================================
-set "_rp="
+set "_rp=Y"
 set /p "_rp=Create a System Restore Point first? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
 set "_c="
@@ -2231,7 +2280,7 @@ echo  network-stack reset, or debloat. Registry changes go into ONE JSON backup;
 echo  non-registry parts (DNS / BCD / memory compression) revert from their own menus.
 echo  A REBOOT is required afterwards.
 echo =====================================================================================
-set "_rp="
+set "_rp=Y"
 set /p "_rp=Create a System Restore Point first? (strongly recommended) (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
 set "_c="
@@ -2346,7 +2395,7 @@ set /p "_cc=Apply the valid directives and skip the problems? (Y/N): "
 if /i not "%_cc%"=="Y" goto MenuPresets
 
 :_pcReady
-set "_rp="
+set "_rp=Y"
 set /p "_rp=Create a System Restore Point first? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
 call :PresetBegin custom_%_pbase%
