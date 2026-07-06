@@ -1707,7 +1707,7 @@ rem  is captured intact, and there is nothing the log step could misread as a re
 set "_cmdlog=%_cmd:"=%"
 echo   ^> %_cmd%
 call :Log "EXEC: %_cmdlog%"
-cmd /s /c "%_cmd%" 1>>"%LOGFILE%" 2>>&1
+cmd /s /c "%_cmd%" >nul 2>&1
 if errorlevel 1 (
     call :Log "FAIL: %_cmdlog%"
     rem  Count as a REAL failure only when this is a tracked action AND we are not elevated - the
@@ -2607,7 +2607,7 @@ set /p "_cc=Import this .reg backup now? (Y/N): "
 if /i not "%_cc%"=="Y" goto MenuBackups
 echo   ^> Importing "%_qshow%"...
 call :Log "REG restore (import) from %_qshow%"
-reg import "%_qfile%" 1>>"%LOGFILE%" 2>>&1
+reg import "%_qfile%" >nul 2>&1
 if errorlevel 1 (
     echo [WARN] Import reported an error - check the log for details.
     call :Log "  FAIL reg import %_qshow%"
