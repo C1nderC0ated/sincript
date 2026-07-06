@@ -2719,3 +2719,4 @@ if defined _rd set "_sz=!_rd:\=\\!"
 if defined _rd set "_sz=!_sz:"=\"!"
 >>"!PRESET_JSON_TMP!" echo {"key":"!_jk!","name":"!_jv!","present":true,"oldtype":"REG_SZ","olddata":"!_sz!"}
 goto :eof
+
