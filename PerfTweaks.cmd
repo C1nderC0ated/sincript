@@ -20,7 +20,8 @@ net session >nul 2>&1 || fltmc >nul 2>&1 || reg query "HKU\S-1-5-19" >nul 2>&1
 if not errorlevel 1 ( set "_ELEV=1" & goto AdminOK )
 if /i "%~1"=="/elevated" goto AdminWarn
 echo Requesting Administrator privileges...
-powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '/elevated' -Verb RunAs -WorkingDirectory (Split-Path -Parent '%~f0')" >nul 2>&1
+set "PT_SELF=%~f0"
+powershell -NoProfile -Command "Start-Process -FilePath $env:PT_SELF -ArgumentList '/elevated' -Verb RunAs -WorkingDirectory (Split-Path -Parent $env:PT_SELF)" >nul 2>&1
 exit /b
 
 :AdminWarn
@@ -1887,12 +1888,21 @@ if not defined _ln (
 set "_td=REG_!_ln:*REG_=!"
 set "_rd="
 for /f "tokens=1,*" %%a in ("!_td!") do ( set "_rt=%%a" & set "_rd=%%b" )
+rem  Non-ASCII value data can't survive the console-code-page echo into an ANSI .reg
+rem  (it would restore as mojibake). Detect it and decline honestly below - the full
+rem  reg export handles non-ASCII correctly. DWORD data is numeric, so this never trips it.
+set "_naData="
+if defined _rd echo(!_rd!| findstr /r "[^ -~]" >nul && set "_naData=1"
 if /i "!_rt!"=="REG_DWORD" (
     set "_hx=0000000!_rd:~2!"
     >>"!_bkp!" echo "!_val!"=dword:!_hx:~-8!
     goto :eof
 )
 if /i "!_rt!"=="REG_SZ" (
+    if defined _naData (
+        >>"!_bkp!" echo ; original value was REG_SZ with non-ASCII data - not auto-restorable from this file - use the full registry backup or a restore point
+        goto :eof
+    )
     rem  guard on "defined _rd": an EMPTY REG_SZ leaves _rd undefined, and !_rd:...! on an
     rem  undefined var returns the literal pattern (\=\\) - which would corrupt the .reg.
     set "_sd="
@@ -2536,7 +2546,7 @@ del "%_prres%" >nul 2>&1
 set "PT_PRRES=%_prres%"
 rem  Child counts restored/failed values (an already-absent delete counts as success) and writes
 rem  "ok fail badjson" so the batch can report the REAL outcome instead of an unconditional [OK].
-start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue';$p=$env:PT_FILE;$ok=0;$fail=0;try{$items=Get-Content -Raw -LiteralPath $p | ConvertFrom-Json}catch{'0 0 1'|Out-File -FilePath $env:PT_PRRES -Encoding ASCII;exit 2};foreach($it in $items){ if(-not $it.present){ reg delete $it.key /v $it.name /f 2>$null | Out-Null; if($LASTEXITCODE -eq 0){$ok++}else{ reg query $it.key /v $it.name 2>$null | Out-Null; if($LASTEXITCODE -ne 0){$ok++}else{$fail++} } } elseif($it.oldtype -eq 'REG_DWORD'){ reg add $it.key /v $it.name /t REG_DWORD /d $it.olddata /f 2>$null | Out-Null; if($LASTEXITCODE -eq 0){$ok++}else{$fail++} } elseif($it.oldtype -eq 'REG_SZ'){ $rk=$it.key -replace '^HKLM\\','HKLM:\' -replace '^HKCU\\','HKCU:\' -replace '^HKCR\\','Registry::HKEY_CLASSES_ROOT\' -replace '^HKU\\','Registry::HKEY_USERS\' -replace '^HKCC\\','Registry::HKEY_CURRENT_CONFIG\'; try{ if(-not (Test-Path -LiteralPath $rk)){New-Item -Path $rk -Force -ErrorAction Stop|Out-Null}; Set-ItemProperty -LiteralPath $rk -Name $it.name -Value ([string]$it.olddata) -Type String -ErrorAction Stop; $ok++ }catch{$fail++} } }; (''+$ok+' '+$fail+' 0')|Out-File -FilePath $env:PT_PRRES -Encoding ASCII; if($fail -gt 0){exit 1}else{exit 0}"
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue';$p=$env:PT_FILE;$ok=0;$fail=0;try{$items=Get-Content -Raw -LiteralPath $p | ConvertFrom-Json}catch{'0 0 1'|Out-File -FilePath $env:PT_PRRES -Encoding ASCII;exit 2};foreach($it in $items){ if(-not $it.present){ reg delete $it.key /v $it.name /f 2>$null | Out-Null; if($LASTEXITCODE -eq 0){$ok++}else{ reg query $it.key /v $it.name 2>$null | Out-Null; if($LASTEXITCODE -ne 0){$ok++}else{$fail++} } } elseif($it.oldtype -eq 'REG_DWORD'){ reg add $it.key /v $it.name /t REG_DWORD /d $it.olddata /f 2>$null | Out-Null; if($LASTEXITCODE -eq 0){$ok++}else{$fail++} } elseif($it.oldtype -eq 'REG_SZ' -and $it.restorable -ne $false){ $rk=$it.key -replace '^HKLM\\','HKLM:\' -replace '^HKCU\\','HKCU:\' -replace '^HKCR\\','Registry::HKEY_CLASSES_ROOT\' -replace '^HKU\\','Registry::HKEY_USERS\' -replace '^HKCC\\','Registry::HKEY_CURRENT_CONFIG\'; try{ if(-not (Test-Path -LiteralPath $rk)){New-Item -Path $rk -Force -ErrorAction Stop|Out-Null}; Set-ItemProperty -LiteralPath $rk -Name $it.name -Value ([string]$it.olddata) -Type String -ErrorAction Stop; $ok++ }catch{$fail++} } }; (''+$ok+' '+$fail+' 0')|Out-File -FilePath $env:PT_PRRES -Encoding ASCII; if($fail -gt 0){exit 1}else{exit 0}"
 set "_prrc=%errorlevel%"
 set "PT_FILE=" & set "PT_PRRES="
 set "_okN=0" & set "_failN=0" & set "_badjson=0"
@@ -2695,6 +2705,8 @@ if not defined _ln goto _bvjAbsent
 set "_td=REG_!_ln:*REG_=!"
 set "_rd="
 for /f "tokens=1,*" %%a in ("!_td!") do ( set "_rt=%%a" & set "_rd=%%b" )
+set "_naData="
+if defined _rd echo(!_rd!| findstr /r "[^ -~]" >nul && set "_naData=1"
 if /i "!_rt!"=="REG_DWORD" goto _bvjDword
 if /i "!_rt!"=="REG_SZ" goto _bvjSz
 >>"!PRESET_JSON_TMP!" echo {"key":"!_jk!","name":"!_jv!","present":true,"oldtype":"!_rt!","restorable":false}
@@ -2714,6 +2726,10 @@ rem  quotes, silently losing any " in the prior REG_SZ data so the restore wrote
 rem  Guard on "defined _rd": an EMPTY REG_SZ leaves _rd undefined, and !_rd:...! on an undefined
 rem  var returns the literal pattern (\=\\), which is INVALID JSON and breaks ConvertFrom-Json for
 rem  the whole preset backup. Empty -> "" (valid).
+if defined _naData (
+    >>"!PRESET_JSON_TMP!" echo {"key":"!_jk!","name":"!_jv!","present":true,"oldtype":"REG_SZ","restorable":false}
+    goto :eof
+)
 set "_sz="
 if defined _rd set "_sz=!_rd:\=\\!"
 if defined _rd set "_sz=!_sz:"=\"!"
