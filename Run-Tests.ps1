@@ -586,7 +586,7 @@ Invoke-Test 'Repair actions gate their status on elevation (not a blind [OK])' {
 }
 
 # ===============================================================================
-# 29. DISM/SFC stream their output live (v1.10 change 1): :SfcDism runs both
+# 29. DISM/SFC stream their output live: :SfcDism runs both
 #     through :RunLive, whose exec line has NO redirect - the native progress
 #     display is the only sign of life on a multi-minute run. :Run (the quiet
 #     path) must stay suppressed, and :RunLive must keep :Run's full
@@ -613,7 +613,7 @@ Invoke-Test ':SfcDism streams DISM/SFC via :RunLive (no output suppression)' {
 }
 
 # ===============================================================================
-# 30. Laptop-aware advisories (v1.10 change 2): startup classifies the machine
+# 30. Laptop-aware advisories: startup classifies the machine
 #     (CmBatt battery presence, pure reg query), the start log records it, and
 #     every battery-hostile action shows :LaptopAdvisory BEFORE its first
 #     prompt. The advisory routines must stay warning-only - no prompts, no
