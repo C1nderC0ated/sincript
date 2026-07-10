@@ -313,7 +313,7 @@ rationale.
 
 Sincript ships with a **static-analysis** harness in `tests/`. `PerfTweaks.cmd`
 is interactive and changes the system, so it can't be safely unit-tested by
-*running* it; instead `tests/Run-Tests.ps1` (28 checks on stock Windows
+*running* it; instead `tests/Run-Tests.ps1` (30 checks on stock Windows
 PowerShell 5.1 — no Pester) parses the script text for invariants that tend to
 break silently, including:
 
@@ -329,7 +329,7 @@ Run from the repository root:
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 ```
 
-Exit code `0` means all 28 checks passed; `1` means at least one failed, with
+Exit code `0` means all 30 checks passed; `1` means at least one failed, with
 the offending detail printed. See `tests/README.md` for the full numbered list.
 
 ---
