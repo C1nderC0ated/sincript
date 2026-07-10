@@ -585,6 +585,78 @@ Invoke-Test 'Repair actions gate their status on elevation (not a blind [OK])' {
     }
 }
 
+# ===============================================================================
+# 29. DISM/SFC stream their output live (v1.10 change 1): :SfcDism runs both
+#     through :RunLive, whose exec line has NO redirect - the native progress
+#     display is the only sign of life on a multi-minute run. :Run (the quiet
+#     path) must stay suppressed, and :RunLive must keep :Run's full
+#     bookkeeping (EXEC/FAIL logging + the conservative failure tally).
+# ===============================================================================
+Invoke-Test ':SfcDism streams DISM/SFC via :RunLive (no output suppression)' {
+    $cmd = Read-Lines $CmdPath
+
+    $sfc = (Get-RoutineBody -Lines $cmd -Label 'SfcDism') -join "`n"
+    Assert-True ($sfc -match '(?i)call :RunLive "dism /online /cleanup-image /restorehealth"') ':SfcDism no longer runs DISM through :RunLive - its output is suppressed again (regression of v1.10 change 1).'
+    Assert-True ($sfc -match '(?i)call :RunLive "sfc /scannow"') ':SfcDism no longer runs SFC through :RunLive - its output is suppressed again (regression of v1.10 change 1).'
+
+    $live = Get-RoutineBody -Lines $cmd -Label 'RunLive'
+    $exec = @($live | Where-Object { $_ -match '(?i)^\s*cmd /s /c' })
+    Assert-True ($exec.Count -eq 1) ':RunLive must contain exactly one "cmd /s /c" exec line.'
+    Assert-True ($exec[0] -notmatch '>') (':RunLive exec line redirects output - streaming is broken: ' + $exec[0].Trim())
+    $liveText = $live -join "`n"
+    Assert-True ($liveText -match '(?i)EXEC:') ':RunLive lost the EXEC log line - bookkeeping must match :Run.'
+    Assert-True ($liveText -match '(?i)FAIL:') ':RunLive lost the FAIL log branch - bookkeeping must match :Run.'
+    Assert-True ($liveText -match '(?i)if defined _RUNTRACK if "%_ELEV%"=="0" set /a _FAILS\+=1') ':RunLive lost the conservative _RUNTRACK/_ELEV failure tally.'
+
+    $runExec = @( (Get-RoutineBody -Lines $cmd -Label 'Run') | Where-Object { $_ -match '(?i)^\s*cmd /s /c' } )
+    Assert-True ($runExec.Count -eq 1 -and $runExec[0] -match '>nul 2>&1') ':Run (the quiet path) no longer suppresses output - short commands would spam the console.'
+}
+
+# ===============================================================================
+# 30. Laptop-aware advisories (v1.10 change 2): startup classifies the machine
+#     (CmBatt battery presence, pure reg query), the start log records it, and
+#     every battery-hostile action shows :LaptopAdvisory BEFORE its first
+#     prompt. The advisory routines must stay warning-only - no prompts, no
+#     writes, no commands - or the opt-in philosophy silently breaks.
+# ===============================================================================
+Invoke-Test 'Machine class detected at startup; advisories warning-only and pre-prompt' {
+    $cmd  = Read-Lines $CmdPath
+    $text = $cmd -join "`n"
+
+    Assert-True ($text -match '(?i)set "MACHINE=unknown"') 'Startup no longer initializes MACHINE=unknown.'
+    Assert-True ($text -match '(?i)Services\\CmBatt\\Enum') 'The CmBatt battery-presence probe is gone - machine class is never detected.'
+    Assert-True ($text -match '(?i)PerfTweaks start[^"]*machine=%MACHINE%') 'The start log line no longer records machine= (cross-era parity with the C# port).'
+
+    foreach ($adv in 'LaptopAdvisory','DesktopAdvisory') {
+        $b = Get-RoutineBody -Lines $cmd -Label $adv
+        $t = $b -join "`n"
+        Assert-True ($t -match '(?i)if /i not "%MACHINE%"=="') ":$adv does not gate on MACHINE - it would fire on every machine."
+        Assert-True ($t -match '\[ADVISORY\]') ":$adv lost its [ADVISORY] output line."
+        foreach ($ln in $b) {
+            Assert-True ($ln -notmatch '(?i)set /p|call :SafeReg|call :Run|reg add|powercfg|bcdedit|schtasks') (":$adv is no longer warning-only - it contains: " + $ln.Trim())
+        }
+    }
+
+    foreach ($r in 'Power','BcdTimers','TimerResApply','ApplyRecommended','PresetModerate','PresetHeavy') {
+        $b = Get-RoutineBody -Lines $cmd -Label $r
+        $ai = -1; $pi = -1
+        for ($i = 0; $i -lt $b.Count; $i++) {
+            if ($ai -lt 0 -and $b[$i] -match '(?i)call :LaptopAdvisory') { $ai = $i }
+            if ($pi -lt 0 -and $b[$i] -match '(?i)set /p ')             { $pi = $i }
+        }
+        Assert-True ($ai -ge 0) ":$r lost its call :LaptopAdvisory (it applies battery-hostile changes)."
+        Assert-True ($pi -lt 0 -or $ai -lt $pi) ":$r shows the laptop advisory AFTER its first prompt - the user would confirm before seeing the warning."
+    }
+
+    $perf = Get-RoutineBody -Lines $cmd -Label 'Performance'
+    $di = -1; $qi = -1
+    for ($i = 0; $i -lt $perf.Count; $i++) {
+        if ($di -lt 0 -and $perf[$i] -match '(?i)call :DesktopAdvisory') { $di = $i }
+        if ($qi -lt 0 -and $perf[$i] -match '(?i)LargeSystemCache=1')    { $qi = $i }
+    }
+    Assert-True ($di -ge 0 -and $qi -ge 0 -and $di -lt $qi) ':Performance no longer shows :DesktopAdvisory before the LargeSystemCache prompt.'
+}
+
 # ---- summary ------------------------------------------------------------------
 Write-Host ""
 if ($script:Failures.Count -eq 0) {
@@ -595,3 +667,4 @@ else {
     Write-Host ("{0} of {1} test(s) FAILED: {2}" -f $script:Failures.Count, $script:Total, ($script:Failures -join ', ')) -ForegroundColor Red
     exit 1
 }
+
