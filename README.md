@@ -11,6 +11,15 @@ is made, and the script can create a System Restore Point and a full registry
 export on request. There is no silent "apply everything" — you choose what
 runs.
 
+The script also detects at startup whether it is running on a **laptop or a
+desktop** (ACPI battery presence — one registry query, no WMI/PowerShell; shown
+as `Machine=` on the main menu and in the log). Actions that are typically
+counterproductive on the detected machine class — the always-on power plan,
+hibernation off, BCD dynamic-tick off, and the timer-resolution autostart on
+laptops; `LargeSystemCache` on desktops — print an **`[ADVISORY]`** line before
+their confirmation prompt. Advisories are informational only: they never block
+an action, never change a default, and never alter what a preset applies.
+
 The **runtime** is a single self-contained `PerfTweaks.cmd` (no installer, no
 dependencies). The release also ships optional bundled inputs, a
 timer-resolution helper, an example custom preset, and a developer test
@@ -69,7 +78,7 @@ harness — see [Release contents](#release-contents).
 | 0 | Exit | |
 
 ### Sub-menus
-- **Cleanup & repair** — Disk cleanup (with an optional, irreversible clear of **all Event Viewer logs**) · SFC + DISM repair · Windows Update reset · re-register Microsoft Store · compact WinSxS.
+- **Cleanup & repair** — Disk cleanup (with an optional, irreversible clear of **all Event Viewer logs**) · SFC + DISM repair (their native progress output now streams live to the console) · Windows Update reset · re-register Microsoft Store · compact WinSxS.
 - **Network & DNS** — Apply TCP tweaks (autotuning, RSS/RSC; optional **Nagle / delayed-ACK off** for lower latency) · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
 - **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut) · apply/remove a higher **timer resolution** (SetTimerResolution autostart) · remove built-in Store apps (**debloat**) · **manage startup programs** (flip Run-key and Startup-folder entries between Enabled and Disabled via the same reversible `StartupApproved` switch Task Manager uses; the prior state is saved to a `.reg` backup before every flip).
 - **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA telemetry tasks + registry, or the AMD User Experience Program opt-out) · GPU hardware scheduling (HAGS) on/off · set a permanent per-program CPU priority (per `.exe`, via Image File Execution Options).
