@@ -65,7 +65,20 @@ if defined WIN_BUILD if !WIN_BUILD! GEQ 22000 set "IS_WIN11=1"
 set "GPU=unknown"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" /s /v DriverDesc 2>nul | findstr /I "nvidia" >nul && set "GPU=nvidia"
 reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" /s /v DriverDesc 2>nul | findstr /I "radeon" >nul && set "GPU=amd"
-call :Log "PerfTweaks start - build %WIN_BUILD% win11=%IS_WIN11% gpu=%GPU%"
+rem ---------- Machine class (laptop / desktop / unknown) ----------
+rem  CmBatt is the ACPI control-method battery driver: its Enum\Count is nonzero exactly
+rem  when an internal battery is present, separating laptops from desktops with one instant
+rem  reg query (no WMI/PowerShell; USB UPS batteries enumerate under hidbatt, not CmBatt).
+rem  Failure modes stay safe: an unreadable key leaves MACHINE=unknown and a battery-removed
+rem  laptop reads as desktop - the advisories this feeds are warning-only, so a misread means
+rem  a missing hint, never a changed default or a blocked action.
+set "MACHINE=unknown"
+set "_bat="
+for /f "tokens=3" %%M in ('reg query "HKLM\SYSTEM\CurrentControlSet\Services\CmBatt\Enum" /v Count 2^>nul ^| findstr /I "Count"') do set "_bat=%%M"
+if not defined _bat ( reg query "HKLM\SYSTEM\CurrentControlSet\Services\CmBatt" >nul 2>&1 && set "_bat=0x0" )
+if "%_bat%"=="0x0" set "MACHINE=desktop"
+if defined _bat if not "%_bat%"=="0x0" set "MACHINE=laptop"
+call :Log "PerfTweaks start - build %WIN_BUILD% win11=%IS_WIN11% gpu=%GPU% machine=%MACHINE%"
 rem =====================================================================================
 rem  MAIN MENU
 rem =====================================================================================
@@ -73,7 +86,7 @@ rem ============================================================================
 cls
 call :Logo
 echo ================================  MAIN MENU  ======================================
-echo   Build %WIN_BUILD%   Win11=%IS_WIN11%   GPU=%GPU%
+echo   Build %WIN_BUILD%   Win11=%IS_WIN11%   GPU=%GPU%   Machine=%MACHINE%
 echo -----------------------------------------------------------------------------------
 echo     1.  Cleanup ^& repair        (temp/logs, DISM/SFC, Windows Update, Store, WinSxS)
 echo     2.  Performance tweaks       (GameDVR off, priorities, snappier UI)
@@ -335,13 +348,13 @@ cls
 call :Logo
 echo =============================  DISM + SFC integrity  ==============================
 echo  Repairs the component store (DISM RestoreHealth) then verifies system files (SFC).
-echo  Takes several minutes; let it finish.
+echo  Takes several minutes; progress streams below - let it finish.
 echo =====================================================================================
 set "_c="
 set /p "_c=Run DISM + SFC now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
-call :Run "dism /online /cleanup-image /restorehealth"
-call :Run "sfc /scannow"
+call :RunLive "dism /online /cleanup-image /restorehealth"
+call :RunLive "sfc /scannow"
 if "%_ELEV%"=="0" ( echo [WARN] Not elevated - DISM/SFC could not run. Re-run as Administrator. ) else ( echo [OK] DISM + SFC finished. Check the output above and the log for any files SFC could not repair. )
 pause
 goto MenuCleanup
@@ -436,6 +449,7 @@ echo       N = leave unchanged
 set /p "_q3=  Choose [1/2/N]: "
 if "%_q3%"=="1" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 42 (0x2A)"
 if "%_q3%"=="2" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 2 "Win32PrioritySeparation default (2)"
+call :DesktopAdvisory
 set /p "_q4=  LargeSystemCache=1 (can help some laptops, can hurt desktops)? (Y/N): "
 if /i "%_q4%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "LargeSystemCache" REG_DWORD 1 "LargeSystemCache on"
 set /p "_q5=  Disable Windows Game Mode (contested; some titles run smoother without it)? (Y/N): "
@@ -539,6 +553,7 @@ echo ================================  POWER PLAN  =============================
 echo  Activates the Ultimate Performance plan (falls back to High Performance) and sets
 echo  monitor/standby/disk sleep timeouts to never. Best for a plugged-in desktop.
 echo =====================================================================================
+call :LaptopAdvisory
 set "_c="
 set /p "_c=Apply high-performance power plan? (Y/N): "
 if /i not "%_c%"=="Y" goto MainMenu
@@ -1007,6 +1022,7 @@ echo  Removes the forced platform clock, forces the platform tick, disables dyna
 echo  and sets TSC sync = enhanced (the BCD timer combo from the optimization guide).
 echo  Can help timer-sensitive workloads. Reversible (option 4). REBOOT required.
 echo =====================================================================================
+call :LaptopAdvisory
 set "_c="
 set /p "_c=Apply timer tweaks? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
@@ -1310,6 +1326,7 @@ echo =========================  Apply recommended safe set  ====================
 echo  Runs Cleanup + Privacy + Performance + Power + Network core tweaks with no prompts.
 echo  Optional/risky items are NOT included. A restore point first is strongly advised.
 echo =====================================================================================
+call :LaptopAdvisory
 set "_rp=Y"
 set /p "_rp=Create a System Restore Point now? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
@@ -1395,6 +1412,7 @@ echo  a higher Windows timer resolution. On Windows 10 2004+ / 11 it also sets
 echo  GlobalTimerResolutionRequests=1 so the change is system-wide (this needs a REBOOT).
 echo  Reversible via option 7 (Remove timer resolution).
 echo =====================================================================================
+call :LaptopAdvisory
 call :RequireBundledFile SetTimerResolution.exe "raises the Windows timer resolution (autostart helper)"
 echo.
 echo  Resolution is in 100ns units:  5000 = 0.5 ms (typical best),  10000 = 1 ms.
@@ -1719,6 +1737,23 @@ if errorlevel 1 (
 ) else ( call :Log "OK: %_cmdlog%" )
 goto :eof
 
+:RunLive
+rem  %1 = full command line. Identical contract and bookkeeping to :Run, except the child
+rem  output STREAMS to this console instead of being swallowed - for long-runners whose
+rem  native progress display (DISM percent bar, SFC verification counter) is the only sign
+rem  of life over several minutes. The log stays outcome-only (EXEC/OK/FAIL) either way.
+set "_cmd=%~1"
+set "_cmdlog=%_cmd:"=%"
+echo   ^> %_cmd%
+call :Log "EXEC: %_cmdlog%"
+cmd /s /c "%_cmd%"
+if errorlevel 1 (
+    call :Log "FAIL: %_cmdlog%"
+    rem  Same conservative failure-tally rule as :Run - see the comment there.
+    if defined _RUNTRACK if "%_ELEV%"=="0" set /a _FAILS+=1
+) else ( call :Log "OK: %_cmdlog%" )
+goto :eof
+
 :Summary
 rem %1 = success phrase. Prints [OK] if no registry write failed since _FAILS was last reset,
 rem otherwise an honest [WARN] with the count. :SafeRegAdd / :SafeRegDelete keep _FAILS current
@@ -1733,6 +1768,24 @@ if "%_FAILS%"=="0" (
 )
 rem  Tracking is per-action: clear it here so a later untracked action (e.g. cleanup) can't inherit it.
 set "_RUNTRACK="
+goto :eof
+
+:LaptopAdvisory
+rem  Hardware advisory: shown before the confirm prompt of actions that typically hurt
+rem  battery life / thermals on portables (power core, hibernate off, BCD dynamic-tick
+rem  off, held timer resolution). Warning-only BY DESIGN: it never blocks, never changes
+rem  a prompt default, never alters what a preset applies. The C# port shares this rule.
+if /i not "%MACHINE%"=="laptop" goto :eof
+echo   [ADVISORY] This machine looks like a laptop - this action typically costs battery
+echo              life / heat there for little gain. It stays your call, and stays reversible.
+goto :eof
+
+:DesktopAdvisory
+rem  Inverse case, currently for LargeSystemCache only - its prompt already says "can help
+rem  some laptops, can hurt desktops"; this makes that line machine-aware.
+if /i not "%MACHINE%"=="desktop" goto :eof
+echo   [ADVISORY] This machine looks like a desktop - this option mainly helps some laptops
+echo              and can hurt desktop performance.
 goto :eof
 
 :ApplyDns
@@ -2251,6 +2304,7 @@ echo  Applies the recommended safe set - cleanup, privacy, performance, power an
 echo  core tweaks - then offers to install OpenAsar. Registry changes go into ONE JSON
 echo  backup. This is the same set as "Apply recommended safe set", plus OpenAsar.
 echo =====================================================================================
+call :LaptopAdvisory
 set "_rp=Y"
 set /p "_rp=Create a System Restore Point first? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
@@ -2290,6 +2344,7 @@ echo  network-stack reset, or debloat. Registry changes go into ONE JSON backup;
 echo  non-registry parts (DNS / BCD / memory compression) revert from their own menus.
 echo  A REBOOT is required afterwards.
 echo =====================================================================================
+call :LaptopAdvisory
 set "_rp=Y"
 set /p "_rp=Create a System Restore Point first? (strongly recommended) (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
