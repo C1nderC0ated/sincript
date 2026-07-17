@@ -815,7 +815,9 @@ Invoke-Test 'Lock finder refuses to kill critical system processes' {
     $lw = (Get-RoutineBody -Lines $cmd -Label 'LockWorker') -join "`n"
     Assert-True ($lw -match 'Critical' -and $lw -match '1000') 'LockWorker does not classify RmCritical (1000).'
     $ask = (Get-RoutineBody -Lines $cmd -Label 'LockFinder_ask') -join "`n"
-    Assert-True ($ask -match '(?i)_lfcrit\[%_lfk%\]!"=="critical"') ':LockFinder_ask does not block a close on a critical process.'
+    # indexes with _lfi - the VALIDATED copy of the user's pick - not raw set /p input
+    Assert-True ($ask -match '(?i)_lfcrit\[%_lfi%\]!"=="critical"') ':LockFinder_ask does not block a close on a critical process.'
+    Assert-True ($ask -match '(?i)set "_lfi=%_lfk%"') ':LockFinder_ask no longer copies the validated pick into _lfi - raw set /p input would be indexing inside blocks again.'
     Assert-True ($ask -match '(?i)BLOCKED') ':LockFinder_ask has no BLOCKED message for a critical process.'
 }
 
@@ -947,7 +949,17 @@ Invoke-Test 'SysMain knob: disk probed, advisory warning-only and pre-prompt' {
 
     $adv = Get-RoutineBody -Lines $cmd -Label 'DiskAdvisory'
     $advText = $adv -join "`n"
-    Assert-True ($advText -match '(?i)if /i "%SYSDISK%"=="ssd" goto :eof') ':DiskAdvisory no longer returns early on a confirmed SSD - it would tell SSD users to keep SysMain enabled.'
+    # A confirmed SSD must still return EARLY - the branch may print a positive line
+    # first, but it must not fall through into the HDD/unknown caveat.
+    $ssdIdx = -1; $eofIdx = -1; $hddIdx = -1
+    for ($i = 0; $i -lt $adv.Count; $i++) {
+        if ($ssdIdx -lt 0 -and $adv[$i] -match '(?i)if /i "%SYSDISK%"=="ssd"') { $ssdIdx = $i }
+        if ($ssdIdx -ge 0 -and $eofIdx -lt 0 -and $adv[$i] -match '(?i)goto :eof')   { $eofIdx = $i }
+        if ($hddIdx -lt 0 -and $adv[$i] -match '(?i)"%SYSDISK%"=="hdd"')             { $hddIdx = $i }
+    }
+    Assert-True ($ssdIdx -ge 0) ':DiskAdvisory no longer branches on a confirmed SSD.'
+    Assert-True ($eofIdx -gt $ssdIdx) ':DiskAdvisory does not return early on a confirmed SSD - it would fall through and tell SSD users to keep SysMain enabled.'
+    Assert-True ($hddIdx -lt 0 -or $eofIdx -lt $hddIdx) ':DiskAdvisory reaches the HDD branch on a confirmed SSD.'
     Assert-True ($advText -match '(?i)"%SYSDISK%"=="hdd"') ':DiskAdvisory lost its HDD branch - the one case where the hint actually matters.'
     Assert-True ($advText -match '\[ADVISORY\]') ':DiskAdvisory lost its [ADVISORY] output line.'
     foreach ($ln in $adv) {
@@ -1172,6 +1184,59 @@ Invoke-Test 'Multi-step runs never depend on a bundled file' {
     $rbBody = Get-RoutineBody -Lines $cmd -Label 'RequireBundledFile'
     $rb = @($rbBody | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
     Assert-True ($rb -match '(?i)goto MenuApps') ':RequireBundledFile no longer aborts on a missing file - the caller would run on without it.'
+}
+
+# ===============================================================================
+# 55. User input must never be percent-expanded inside a ( ) block. cmd expands
+#     %var% at PARSE time - before it evaluates the condition, and before it works
+#     out where the block ends. So a value containing ")" injects a bare paren into
+#     the block structure and cmd aborts the whole script with "was unexpected at
+#     this time". This is not hypothetical: typing
+#         C:\Program Files (x86)\Steam\steam.exe
+#     into the lock finder killed sincript outright, while a paren-free path worked
+#     - and it happened whether or not the file existed, because the block is parsed
+#     before the `if` is even tested.
+#
+#     !var! expands at RUN time, after the block is parsed, so the parens are data.
+#     Quoting also works ("%var%") because cmd's block parser respects quotes - so
+#     only UNQUOTED expansions are flagged here.
+#
+#     The static analyzer cannot catch this: the ")" arrives through a variable, so
+#     there is nothing in the source text to see. Hence a test.
+# ===============================================================================
+Invoke-Test 'User input is never percent-expanded unquoted inside a block' {
+    $cmd = Read-Lines $CmdPath
+
+    # every variable that receives user input
+    $userVars = @{}
+    foreach ($ln in $cmd) {
+        if ($ln -match '(?i)set\s+/p\s+"?(\w+)\s*=') { $userVars[$Matches[1].ToLower()] = $true }
+    }
+    Assert-True ($userVars.Count -ge 3) 'Found almost no set /p variables - this test would pass vacuously.'
+
+    # walk multi-line blocks: a line ending in a bare "(" opens one
+    $bad = @()
+    for ($i = 0; $i -lt $cmd.Count; $i++) {
+        if ($cmd[$i] -notmatch '(?<![\^"])\(\s*$') { continue }
+        if ($cmd[$i].Trim() -match '^(?i)(rem|::)') { continue }
+        for ($j = $i + 1; $j -lt $cmd.Count -and $j -lt $i + 60; $j++) {
+            if ($cmd[$j] -match '^\s*\)(\s|$)') { break }
+            $ln = $cmd[$j]
+            if ($ln.Trim() -match '^(?i)(rem|::)') { continue }
+            # mark which positions are outside double quotes (a quote just toggles)
+            $inq = $false; $free = @{}
+            for ($k = 0; $k -lt $ln.Length; $k++) {
+                if ($ln[$k] -eq '"') { $inq = -not $inq; continue }
+                if (-not $inq) { $free[$k] = $true }
+            }
+            foreach ($m in [regex]::Matches($ln, '%(\w+)%')) {
+                if ($userVars.ContainsKey($m.Groups[1].Value.ToLower()) -and $free.ContainsKey($m.Index)) {
+                    $bad += "L$($j+1): $($ln.Trim())"
+                }
+            }
+        }
+    }
+    Assert-True ($bad.Count -eq 0) ("User input percent-expanded UNQUOTED inside a ( ) block - a ')' in the value (e.g. a path under 'Program Files (x86)') ends the block early and aborts the script. Use !var! or quote it:`n  " + ($bad -join "`n  "))
 }
 
 # ---- summary ------------------------------------------------------------------
