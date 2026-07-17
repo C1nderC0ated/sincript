@@ -3,7 +3,7 @@ echo off
 setlocal EnableDelayedExpansion
 cd /d "%~dp0" 2>nul
 mode con: cols=100 lines=36 >nul 2>&1
-color 0D 
+color 0D
 title Sincript - Windows 10/11 Optimizer
 rem =====================================================================================
 rem  PerfTweaks - a curated, reversible Windows 10/11 optimizer with a category menu.
@@ -100,6 +100,7 @@ echo ---------------------------------------------------------------------------
 echo     9.  Apply recommended safe set  (one click: 1-5 core tweaks, no prompts)
 echo    10.  Presets (light / moderate / heavy / custom)  + restore preset backup
 echo    11.  What was excluded (info)
+echo    12.  System tools               (PATH editor, find what locks a file)
 echo     0.  Exit
 echo =====================================================================================
 
@@ -118,6 +119,7 @@ if "%sel%"=="8" goto MenuBackups
 if "%sel%"=="9" goto ApplyRecommended
 if "%sel%"=="10" goto MenuPresets
 if "%sel%"=="11" goto Excluded
+if "%sel%"=="12" goto MenuTools
 if "%sel%"=="0" goto ExitScript
 goto MainMenu
 
@@ -325,19 +327,38 @@ pause
 goto MenuCleanup
 
 :DoCleanupCore
-call :Run "del /f /s /q ""%TEMP%\*.*"""
-call :Run "del /f /s /q ""%SystemRoot%\Temp\*.*"""
-call :Run "del /f /s /q ""%LocalAppData%\Temp\*.*"""
+rem  Every delete below is anchored on an environment variable, and that is a loaded gun
+rem  if one of them is missing. Batch does not error on an unset variable - it expands to
+rem  nothing - so on a machine with a corrupted profile, a stripped environment, or a
+rem  stray "set TEMP=" somewhere up the chain,
+rem      del /f /s /q "%TEMP%\*.*"
+rem  quietly becomes
+rem      del /f /s /q "\*.*"
+rem  which is a RECURSIVE delete from the ROOT of the current drive. Same line, same
+rem  flags, whole machine. Quoting the paths does not help: the quotes are intact, it is
+rem  the content that collapsed.
+rem
+rem  So each root is proven ONCE, here, before any delete runs, and every delete below is
+rem  gated on its root having passed. Anything unproven is skipped out loud rather than
+rem  guessed at - a skipped cleanup costs disk space, a wrong one costs the machine.
+set "_cleanTEMP=" & set "_cleanSystemRoot=" & set "_cleanLocalAppData="
+call :CleanRoot TEMP "%TEMP%"
+call :CleanRoot SystemRoot "%SystemRoot%"
+call :CleanRoot LocalAppData "%LocalAppData%"
+if defined _cleanTEMP call :Run "del /f /s /q ""%TEMP%\*.*"""
+if defined _cleanSystemRoot call :Run "del /f /s /q ""%SystemRoot%\Temp\*.*"""
+if defined _cleanLocalAppData call :Run "del /f /s /q ""%LocalAppData%\Temp\*.*"""
 rem  Intentionally NOT clearing %SystemRoot%\Prefetch - Windows just rebuilds it and the
 rem  next launches get slower; it is a placebo (listed under "What was excluded").
-call :Run "del /f /s /q /a ""%LocalAppData%\Microsoft\Windows\Explorer\*.db"""
-call :Run "del /f /q ""%SystemRoot%\Logs\CBS\*"""
-call :Run "del /f /q ""%SystemRoot%\Logs\DISM\*"""
-call :Run "del /f /q ""%SystemRoot%\Temp\CBS\*"""
-call :Run "del /f /q ""%SystemRoot%\setupact.log"""
-call :Run "del /f /q ""%SystemRoot%\setuperr.log"""
-call :Run "del /f /q ""%SystemRoot%\Panther\*"""
-call :Run "del /f /q ""%LocalAppData%\Microsoft\Windows\WebCache\*.*"""
+if defined _cleanLocalAppData call :Run "del /f /s /q /a ""%LocalAppData%\Microsoft\Windows\Explorer\*.db"""
+if defined _cleanSystemRoot call :Run "del /f /q ""%SystemRoot%\Logs\CBS\*"""
+if defined _cleanSystemRoot call :Run "del /f /q ""%SystemRoot%\Logs\DISM\*"""
+if defined _cleanSystemRoot call :Run "del /f /q ""%SystemRoot%\Temp\CBS\*"""
+if defined _cleanSystemRoot call :Run "del /f /q ""%SystemRoot%\setupact.log"""
+if defined _cleanSystemRoot call :Run "del /f /q ""%SystemRoot%\setuperr.log"""
+if defined _cleanSystemRoot call :Run "del /f /q ""%SystemRoot%\Panther\*"""
+if defined _cleanLocalAppData call :Run "del /f /q ""%LocalAppData%\Microsoft\Windows\WebCache\*.*"""
+rem  No path, nothing to collapse - never gated.
 call :Run "ipconfig /flushdns"
 goto :eof
 rem =====================================================================================
@@ -433,8 +454,9 @@ if /i not "%_c%"=="Y" goto MainMenu
 set "_FAILS=0"
 call :DoPerformanceCore
 set "_q1=" & set "_q2=" & set "_q3=" & set "_q4=" & set "_q5=" & set "_q6=" & set "_q7="
+set "_q8=" & set "_q9=" & set "_q10="
 echo.
-echo Optional knobs (small / unproven gains - your call):
+echo Optional knobs (small / unproven gains, or plain preference - your call):
 set /p "_q1=  SystemResponsiveness=0 (reserve less for background)? (Y/N): "
 if /i "%_q1%"=="Y" call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" REG_DWORD 0 "SystemResponsiveness 0"
 set /p "_q2=  Disable network throttling (may affect media playback)? (Y/N): "
@@ -461,6 +483,19 @@ if /i "%_q6%"=="Y" call :SafeRegAdd "HKCU\Control Panel\Mouse" "MouseThreshold1"
 if /i "%_q6%"=="Y" call :SafeRegAdd "HKCU\Control Panel\Mouse" "MouseThreshold2" REG_SZ 0 "Mouse accel threshold2 off"
 set /p "_q7=  Show file extensions in Explorer (safer, see real file types)? (Y/N): "
 if /i "%_q7%"=="Y" call :SafeRegAdd "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt" REG_DWORD 0 "Show file extensions"
+set /p "_q8=  Turn off Storage Sense - stop Windows auto-deleting temp files / recycle bin (Cleanup does this on demand instead)? (Y/N): "
+if /i "%_q8%"=="Y" call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\StorageSense" "AllowStorageSenseGlobal" REG_DWORD 0 "Storage Sense off (policy)"
+if /i "%_q8%"=="Y" call :SafeRegAdd "HKCU\SOFTWARE\Policies\Microsoft\Windows\StorageSense" "AllowStorageSenseGlobal" REG_DWORD 0 "Storage Sense off (user policy)"
+rem  Classic is already the Windows default, so for most systems this writes what is
+rem  already there and :SafeRegAdd honestly prints [SKIP]. It only does something if you
+rem  turned on "Enhanced" search, which indexes the whole drive - that one is worth undoing.
+set /p "_q9=  Windows Search: index libraries only, not the entire drive (only changes anything if you enabled Enhanced)? (Y/N): "
+if /i "%_q9%"=="Y" call :SafeRegAdd "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Search\Preferences" "WholeFileSystem" REG_DWORD 0 "Windows Search: classic scope"
+call :DetectSysDisk
+call :DiskAdvisory
+set /p "_q10=  Disable SysMain / Superfetch - less background disk and CPU on an SSD (keep it ON for a mechanical HDD)? (Y/N): "
+if /i "%_q10%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\SysMain" "Start" REG_DWORD 4 "SysMain (Superfetch) disabled"
+if /i "%_q10%"=="Y" call :Run "sc stop SysMain"
 call :Summary "Performance tweaks applied."
 pause
 goto MainMenu
@@ -494,6 +529,14 @@ call :Logo
 echo =============================  PRIVACY ^& TELEMETRY  ===============================
 echo  Disables diagnostic telemetry, advertising ID, suggested apps, Cortana/web search,
 echo  feedback prompts, activity feed and location; stops DiagTrack and CEIP tasks.
+echo  Also turns off Windows AI features by policy - Copilot, Recall snapshots and
+echo  Click to Do - plus inking/typing personalization and online speech recognition.
+echo -----------------------------------------------------------------------------------
+echo  Honest notes: the telemetry policy is written as 0 (Security). Enterprise and
+echo  Education honor 0; Home/Pro clamp it to Basic (1) - the lowest those editions
+echo  allow. Stopping DiagTrack also stops Xbox achievement sync and the Feedback Hub.
+echo  Recall policies only have visible effect on Copilot+ hardware; elsewhere they
+echo  are inert but harmless.
 echo =====================================================================================
 set "_c="
 set /p "_c=Apply privacy / telemetry hardening? (Y/N): "
@@ -506,6 +549,9 @@ if /i not "%_svc%"=="Y" goto _privSvcDone
 for %%S in (CDPUserSvc OneSyncSvc PimIndexMaintenanceSvc UnistoreSvc UserDataSvc MessagingService) do call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\%%S" "Start" REG_DWORD 4 "Disable per-user svc %%S"
 
 :_privSvcDone
+set "_fw="
+set /p "_fw=Also block the telemetry service in Windows Firewall (belt-and-braces if an update re-enables it)? (Y/N): "
+if /i "%_fw%"=="Y" call :DiagTrackFirewall
 call :Summary "Privacy tweaks applied."
 pause
 goto MainMenu
@@ -533,6 +579,19 @@ call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" "UploadUserAc
 call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "Start_TrackProgs" REG_DWORD 0 "App-launch tracking off"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors" "DisableLocation" REG_DWORD 1 "Location off"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\OneDrive" "DisableFileSyncNGSC" REG_DWORD 1 "OneDrive auto-sync off (policy)"
+rem  --- Windows AI (Copilot / Recall / Click to Do) - policy off, reversible ---
+call :SafeRegAdd "HKCU\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" "TurnOffWindowsCopilot" REG_DWORD 1 "Copilot off (user policy)"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" "TurnOffWindowsCopilot" REG_DWORD 1 "Copilot off (policy)"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis" REG_DWORD 1 "Recall data analysis off"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "AllowRecallEnablement" REG_DWORD 0 "Recall enablement blocked"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "TurnOffSavingSnapshots" REG_DWORD 1 "Recall snapshots off"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableClickToDo" REG_DWORD 1 "Click to Do off"
+rem  --- inking / typing / speech personalization off ---
+call :SafeRegAdd "HKCU\SOFTWARE\Policies\Microsoft\InputPersonalization" "AllowInputPersonalization" REG_DWORD 0 "Inking-typing personalization off (user policy)"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\InputPersonalization" "AllowInputPersonalization" REG_DWORD 0 "Inking-typing personalization off (policy)"
+call :SafeRegAdd "HKCU\Software\Microsoft\InputPersonalization" "RestrictImplicitTextCollection" REG_DWORD 1 "Implicit text collection off"
+call :SafeRegAdd "HKCU\Software\Microsoft\InputPersonalization\TrainedDataStore" "HarvestContacts" REG_DWORD 0 "Contact harvesting off"
+call :SafeRegAdd "HKCU\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy" "HasAccepted" REG_DWORD 0 "Online speech recognition off"
 call :Run "sc config DiagTrack start= disabled"
 call :Run "sc stop DiagTrack"
 call :Run "sc config dmwappushservice start= disabled"
@@ -542,6 +601,7 @@ call :Run "schtasks /Change /TN ""\Microsoft\Windows\Application Experience\Prog
 call :Run "schtasks /Change /TN ""\Microsoft\Windows\Customer Experience Improvement Program\Consolidator"" /Disable"
 call :Run "schtasks /Change /TN ""\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip"" /Disable"
 call :Run "schtasks /Change /TN ""\Microsoft\Windows\Windows Error Reporting\QueueReporting"" /Disable"
+call :DisableTelemetryTasks
 goto :eof
 rem =====================================================================================
 rem  ACTION: Power plan
@@ -565,6 +625,9 @@ if /i "%_hb%"=="Y" call :Run "powercfg /hibernate off"
 set "_mp="
 set /p "_mp=Set minimum processor state to 5%% (CPU idles to save power, no FPS loss; no in-app undo - reset it under Windows Power Options)? (Y/N): "
 if /i "%_mp%"=="Y" call :SetMinProcState
+set "_pwt="
+set /p "_pwt=Also disable CPU power throttling (background apps run at full speed - more heat, more battery drain)? (Y/N): "
+if /i "%_pwt%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" "PowerThrottlingOff" REG_DWORD 1 "CPU power throttling off"
 call :Summary "Power settings applied."
 pause
 goto MainMenu
@@ -601,7 +664,8 @@ cls
 call :Logo
 echo ==============================  APPLY TCP TWEAKS  =================================
 echo  Receive-side autotuning = normal, heuristics off, RSS on, RSC on (sane defaults).
-echo  Optionally disable Nagle / delayed-ACK on current adapters (lower latency).
+echo  Optionally disable Nagle / delayed-ACK on current adapters (lower latency), and
+echo  stop Delivery Optimization uploading Windows Update files to other PCs.
 echo =====================================================================================
 set "_c="
 set /p "_c=Apply TCP tweaks? (Y/N): "
@@ -614,6 +678,9 @@ if /i not "%_nag%"=="Y" goto _netNagDone
 call :DoNagleOff
 
 :_netNagDone
+set "_dopt="
+set /p "_dopt=Also stop sharing Windows Update downloads with other PCs (Delivery Optimization)? (Y/N): "
+if /i "%_dopt%"=="Y" call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" "DODownloadMode" REG_DWORD 0 "Delivery Optimization: no peer sharing"
 call :Summary "TCP tweaks applied."
 pause
 goto MenuNetwork
@@ -1359,12 +1426,19 @@ echo    - Fully disabling Windows Update or pointing it at a fake update server
 echo    - Disabling VBS / HVCI via buggy boot edits
 echo    - Boot flags that turn off DEP, anti-malware early launch, or the hypervisor
 echo      (those also break WSL2 / Hyper-V / Sandbox)
+echo    - Regrouping svchost services (SvcHostSplitThresholdInKB) - Microsoft splits them
+echo      on purpose for inter-service isolation and reliability, and documents the saving
+echo      from regrouping as modest. Isolation is worth more than the RAM.
 echo.
 echo  Placebo / obsolete / harmful (excluded):
 echo    - XP-era "memory optimization" registry values (fixed pool/cache sizes etc.)
 echo    - Forcing the large system file cache on by default (it is opt-in under Performance)
 echo    - Clearing the pagefile at shutdown (only makes shutdown slower)
 echo    - Clearing the Prefetch folder (Windows rebuilds it; first launches just get slower)
+echo    - Disabling the prefetcher itself (EnablePrefetcher=0) - same cost as above, made
+echo      permanent, and near zero gain on an SSD (SysMain on/off is offered separately)
+echo    - Lowering ServicesPipeTimeout to 30000 - 30 s already IS the Windows default, so
+echo      it changes nothing, and it would silently undo a 60000 fix if you ever needed one
 echo    - Firewall rules that block Google/YouTube IP ranges to "stop throttling" (a myth)
 echo    - Deprecated TCP options (Chimney/NetDMA) removed by Microsoft years ago
 echo    - Hardcoded MTU and other link-specific values copied from another PC
@@ -1717,6 +1791,527 @@ set "PT_SRC=" & set "PT_OUT=" & set "PT_JW="
 if "%_pbc%"=="1" exit /b 1
 if not exist "%~2" exit /b 1
 exit /b 0
+
+rem =====================================================================================
+rem  SUBMENU: System tools
+rem =====================================================================================
+:MenuTools
+cls
+call :Logo
+echo =============================  SYSTEM TOOLS  =======================================
+echo  General-purpose tools, not tweaks. Both are read-first and reversible.
+echo     1.  Edit PATH (System / User environment variable)
+echo     2.  Find what is locking a file (and optionally close it)
+echo     0.  Back
+echo =====================================================================================
+
+:MenuTools_ask
+set "sel="
+set /p "sel=Choose: "
+if not defined sel goto MenuTools_ask
+if "%sel%"=="1" goto PathEditor
+if "%sel%"=="2" goto LockFinder
+if "%sel%"=="0" goto MainMenu
+goto MenuTools
+
+rem =====================================================================================
+rem  ACTION: PATH editor  (System Manager\Environment or HKCU\Environment)
+rem =====================================================================================
+:PathEditor
+cls
+call :Logo
+echo ============================  EDIT PATH VARIABLE  =================================
+echo  Reads the RAW value straight from the registry, so %%VAR%% references stay intact,
+echo  and writes it back as REG_EXPAND_SZ - the type PATH must keep. It never uses
+echo  setx (which silently crops at 1024 chars and freezes %%VAR%% into literal paths).
+echo  Adding or removing an entry backs up the whole PATH value first, then broadcasts
+echo  the change so new programs see it without a sign-out.
+echo -----------------------------------------------------------------------------------
+echo  Which PATH?
+echo     1.  System  (HKLM - affects all users, needs Administrator)
+echo     2.  User    (HKCU - just you)
+echo     0.  Back
+set "_pesc="
+set /p "_pesc=Choose: "
+if not defined _pesc goto MenuTools
+if "%_pesc%"=="1" ( set "PT_PE_SCOPE=machine" & goto PathEditor_show )
+if "%_pesc%"=="2" ( set "PT_PE_SCOPE=user" & goto PathEditor_show )
+if "%_pesc%"=="0" goto MenuTools
+goto PathEditor
+
+:PathEditor_show
+if /i "%PT_PE_SCOPE%"=="machine" if "%_ELEV%"=="0" (
+    echo.
+    echo  [WARN] Editing the System PATH needs Administrator, and this window is not
+    echo         elevated - a save would fail. Close this window and re-launch it
+    echo         with Run as administrator, or pick User PATH instead.
+    echo.
+    pause
+    goto PathEditor
+)
+set "_pelist=%TEMP%\pt_path_%RANDOM%.txt"
+set "_peres=%TEMP%\pt_pathres_%RANDOM%.txt"
+del "%_pelist%" >nul 2>&1
+call :PathWorker list ""
+if not exist "%_pelist%" (
+    echo [ERROR] Could not read the PATH value ^(PowerShell blocked or unavailable^).
+    pause
+    goto MenuTools
+)
+set "_pen=0"
+for /f "usebackq tokens=1,2,* delims=|" %%a in ("%_pelist%") do (
+    set /a _pen+=1
+    set "_pest[!_pen!]=%%b"
+    set "_penm[!_pen!]=%%c"
+)
+del "%_pelist%" >nul 2>&1
+echo.
+if /i "%PT_PE_SCOPE%"=="machine" ( echo  System PATH - %_pen% entry^(ies^): ) else ( echo  User PATH - %_pen% entry^(ies^): )
+echo   #   State    Folder
+echo -----------------------------------------------------------------------------------
+for /l %%I in (1,1,%_pen%) do call :_peShow %%I
+echo -----------------------------------------------------------------------------------
+echo  [missing] = the folder does not exist on disk ^(a dead PATH entry^).
+echo  Folders are shown ASCII-only ^("?"^ for other characters^); an edit still targets
+echo  the exact entry.
+
+:PathEditor_ask
+echo.
+echo     A.  Add a folder            R.  Remove an entry by number
+echo     D.  Remove all dead ^(missing^) entries      C.  Clean duplicate entries
+echo     0.  Back
+set "_pea="
+set /p "_pea=Choose: "
+if not defined _pea goto PathEditor_ask
+if /i "%_pea%"=="0" goto MenuTools
+if /i "%_pea%"=="A" goto PathEditor_add
+if /i "%_pea%"=="R" goto PathEditor_remove
+if /i "%_pea%"=="D" ( set "PT_PE_ARG=" & call :PathEditor_run dropdead "" & goto PathEditor_show )
+if /i "%_pea%"=="C" ( set "PT_PE_ARG=" & call :PathEditor_run dedupe "" & goto PathEditor_show )
+goto PathEditor_ask
+
+:PathEditor_add
+echo.
+echo  Type or paste the folder to add ^(it is added at the END of PATH^).
+set "_pfolder="
+set /p "_pfolder=Folder (blank = cancel): "
+if not defined _pfolder goto PathEditor_ask
+call :PathEditor_run add "%_pfolder%"
+goto PathEditor_show
+
+:PathEditor_remove
+echo.
+set "_prm="
+set /p "_prm=Number to remove (0 = cancel): "
+if not defined _prm goto PathEditor_ask
+if "%_prm%"=="0" goto PathEditor_ask
+set "_pok="
+for /l %%I in (1,1,%_pen%) do if "%_prm%"=="%%I" set "_pok=1"
+if not defined _pok goto PathEditor_remove
+echo.
+echo  About to remove:  !_penm[%_prm%]!
+set "_pc="
+set /p "_pc=Proceed? (Y/N): "
+if /i not "%_pc%"=="Y" goto PathEditor_ask
+call :PathEditor_run removeidx "%_prm%"
+goto PathEditor_show
+
+:PathEditor_run
+rem  %1 = verb (add|removeidx|dropdead|dedupe)   %2 = argument (folder or index)
+rem  Backs up the whole PATH value to a .reg first (via the standard per-value backup),
+rem  then hands the edit to the PS worker, then reports honestly from its result file.
+set "_pverb=%~1"
+set "_parg=%~2"
+if /i "%PT_PE_SCOPE%"=="machine" (
+    set "_pekey=HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+) else (
+    set "_pekey=HKCU\Environment"
+)
+rem  Snapshot the whole Environment key to a .reg before editing. If that backup does not
+rem  land, do NOT touch PATH: an edit you cannot undo is precisely what this feature must
+rem  never do, and it is the same rule :ApplyHosts already follows before it overwrites
+rem  the system hosts file.
+set "_BSV_OK="
+call :BackupSingleValue "!_pekey!" "Path" "PATH (before %_pverb%)"
+if not defined _BSV_OK (
+    echo.
+    echo  [ABORT] PATH was NOT changed - no backup could be written, and a PATH edit
+    echo          you cannot undo is not worth the risk. Check that the backup folder
+    echo          is writable, then try again.
+    echo.
+    pause
+    goto :eof
+)
+del "%_peres%" >nul 2>&1
+call :PathWorker "%_pverb%" "%_parg%"
+set "_perc=%errorlevel%"
+echo.
+if exist "%_peres%" ( type "%_peres%" & del "%_peres%" >nul 2>&1 )
+if "%_perc%"=="0" (
+    call :Log "PATH %PT_PE_SCOPE% %_pverb% ok"
+) else (
+    echo [ERROR] The PATH edit failed - nothing was changed. If this is the System PATH,
+    echo         make sure the window is elevated, then try again.
+    call :Log "PATH %PT_PE_SCOPE% %_pverb% FAILED rc=%_perc%"
+)
+pause
+goto :eof
+
+:_peShow
+rem %1 = 1-based index; prints one aligned row (# / state / folder).
+set "_q1=%1.    "
+set "_q1=!_q1:~0,4!"
+set "_q2=!_pest[%1]!         "
+set "_q2=!_q2:~0,9!"
+set "_q3=!_penm[%1]!"
+echo   !_q1!!_q2!!_q3:~0,64!
+goto :eof
+
+:PathWorker
+rem  %1 = list | add | removeidx | dropdead | dedupe     %2 = folder (add) or index (removeidx)
+rem  One shared PS worker in a minimized window - same font/locale-safe pattern as the
+rem  DNS and Startup workers. Reads the RAW PATH from the registry (REG_EXPAND_SZ, so
+rem  %VAR% stays a reference), performs the edit in .NET, and writes it back with
+rem  reg add /t REG_EXPAND_SZ. On any change it broadcasts WM_SETTINGCHANGE so new
+rem  processes pick up the value without a sign-out. Entry text never round-trips
+rem  through cmd - the number picked in the listing maps to the same split index here.
+set "PT_PE_MODE=%~1"
+set "PT_PE_ARG=%~2"
+set "PT_PE_LIST=%_pelist%"
+set "PT_PE_RES=%_peres%"
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $scope=$env:PT_PE_SCOPE; if($scope -eq 'machine'){ $root=[Microsoft.Win32.Registry]::LocalMachine; $sub='SYSTEM\CurrentControlSet\Control\Session Manager\Environment' } else { $root=[Microsoft.Win32.Registry]::CurrentUser; $sub='Environment' }; $k=$root.OpenSubKey($sub,$false); $raw=''; if($k){ $raw=[string]$k.GetValue('Path',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); $k.Close() }; $parts=@(); if($raw){ foreach($p in ($raw -split ';')){ if($p -ne ''){ $parts+=$p } } }; $mode=$env:PT_PE_MODE; if($mode -eq 'list'){ $i=0; $o=@(); foreach($p in $parts){ $i++; $exp=[Environment]::ExpandEnvironmentVariables($p); $state=if(Test-Path -LiteralPath $exp -PathType Container){'ok'}else{'[missing]'}; $dn=$p -replace '[^\x20-\x7e]','?'; $o+=(''+$i+'|'+$state+'|'+$dn) }; $o | Out-File -FilePath $env:PT_PE_LIST -Encoding ASCII; exit 0 }; $orig=$parts.Count; $changed=$false; $note=''; if($mode -eq 'add'){ $f=$env:PT_PE_ARG; if($f){ if($f.EndsWith('\')){ $f=$f.TrimEnd('\') }; $exists=$false; foreach($p in $parts){ if($p -ieq $f){ $exists=$true } }; if($exists){ $note='That folder is already in PATH - nothing added.' } else { $parts+=$f; $changed=$true; $note='Added: '+($f -replace '[^\x20-\x7e]','?') } } } elseif($mode -eq 'removeidx'){ $n=0; try{ $n=[int]$env:PT_PE_ARG }catch{ $n=0 }; if($n -ge 1 -and $n -le $parts.Count){ $rm=$parts[$n-1]; $keep=@(); for($j=0;$j -lt $parts.Count;$j++){ if($j -ne ($n-1)){ $keep+=$parts[$j] } }; $parts=$keep; $changed=$true; $note='Removed: '+($rm -replace '[^\x20-\x7e]','?') } else { $note='That number is not in the list - nothing removed.' } } elseif($mode -eq 'dropdead'){ $keep=@(); $drop=0; foreach($p in $parts){ $exp=[Environment]::ExpandEnvironmentVariables($p); if(Test-Path -LiteralPath $exp -PathType Container){ $keep+=$p } else { $drop++ } }; if($drop -gt 0){ $parts=$keep; $changed=$true }; $note='Removed '+$drop+' dead entry(ies).' } elseif($mode -eq 'dedupe'){ $seen=@{}; $keep=@(); $drop=0; foreach($p in $parts){ $key=$p.ToLowerInvariant(); if($seen.ContainsKey($key)){ $drop++ } else { $seen[$key]=$true; $keep+=$p } }; if($drop -gt 0){ $parts=$keep; $changed=$true }; $note='Removed '+$drop+' duplicate entry(ies).' }; if(-not $changed){ $note | Out-File -FilePath $env:PT_PE_RES -Encoding ASCII; exit 0 }; $new=($parts -join ';'); if($scope -eq 'machine'){ $kw=$root.OpenSubKey($sub,$true) } else { $kw=$root.OpenSubKey($sub,$true) }; if(-not $kw){ ('Could not open PATH for writing.') | Out-File -FilePath $env:PT_PE_RES -Encoding ASCII; exit 1 }; try{ $kw.SetValue('Path',$new,[Microsoft.Win32.RegistryValueKind]::ExpandString); $kw.Close() }catch{ ('Write failed: '+$_.Exception.Message) | Out-File -FilePath $env:PT_PE_RES -Encoding ASCII; exit 1 }; try{ $sig='using System;using System.Runtime.InteropServices;namespace PTB{public static class N{[DllImport(\"user32.dll\",CharSet=CharSet.Auto)]public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,IntPtr w,string l,uint f,uint t,out UIntPtr r);}}'; Add-Type -TypeDefinition $sig -Language CSharp; $r=[UIntPtr]::Zero; [void][PTB.N]::SendMessageTimeout([IntPtr]0xffff,0x1A,[IntPtr]::Zero,'Environment',2,5000,[ref]$r) }catch{}; ($note+[Environment]::NewLine+'PATH updated. New programs and shells see it now; already-open ones keep the old value until restarted.') | Out-File -FilePath $env:PT_PE_RES -Encoding ASCII; exit 0"
+set "_pwrc=%errorlevel%"
+set "PT_PE_MODE=" & set "PT_PE_ARG=" & set "PT_PE_LIST=" & set "PT_PE_RES="
+exit /b %_pwrc%
+
+rem =====================================================================================
+rem  ACTION: Find what is locking a file  (Restart Manager)
+rem =====================================================================================
+:LockFinder
+cls
+call :Logo
+echo =======================  FIND WHAT IS LOCKING A FILE  =============================
+echo  Uses the Windows Restart Manager - the same API installers use to find what
+echo  has a file open. It lists every process holding the file, and marks the ones
+echo  Windows flags as critical system processes ^(which must never be force-closed^).
+echo  Listing is always safe; closing a process is opt-in, one at a time, and confirmed.
+echo -----------------------------------------------------------------------------------
+echo  Type or paste the full path to the file ^(e.g. a DLL or document you cannot delete^).
+set "_lfpath="
+set /p "_lfpath=File path (blank = back): "
+if not defined _lfpath goto MenuTools
+if not exist "%_lfpath%" (
+    echo.
+    echo  [ERROR] No such file: %_lfpath%
+    echo          Give the full path to an existing file.
+    echo.
+    pause
+    goto LockFinder
+)
+set "_lflist=%TEMP%\pt_lock_%RANDOM%.txt"
+set "_lfres=%TEMP%\pt_lockres_%RANDOM%.txt"
+del "%_lflist%" >nul 2>&1
+call :LockWorker list "%_lfpath%"
+if not exist "%_lflist%" (
+    echo [ERROR] Could not query the file ^(PowerShell blocked, or the Restart Manager
+    echo         service is unavailable^).
+    pause
+    goto MenuTools
+)
+set "_lfn=0"
+for /f "usebackq tokens=1,2,3,4,* delims=|" %%a in ("%_lflist%") do (
+    set /a _lfn+=1
+    set "_lfpid[!_lfn!]=%%b"
+    set "_lfcrit[!_lfn!]=%%c"
+    set "_lfnm[!_lfn!]=%%d"
+)
+del "%_lflist%" >nul 2>&1
+echo.
+if "%_lfn%"=="0" (
+    echo  Nothing is holding that file open - it is free. If Explorer still refuses to
+    echo  delete it, try refreshing the folder ^(F5^) or closing an Explorer preview pane.
+    echo.
+    pause
+    goto MenuTools
+)
+echo  %_lfn% process^(es^) holding this file:
+echo   #    PID     Type        Process
+echo -----------------------------------------------------------------------------------
+for /l %%I in (1,1,%_lfn%) do call :_lfShow %%I
+echo -----------------------------------------------------------------------------------
+echo  [critical] = a core Windows process. Sincript will NOT close these - a reboot is
+echo  the only safe way to release a file they hold.
+
+:LockFinder_ask
+echo.
+set "_lfk="
+set /p "_lfk=Number to close (0 = back): "
+if not defined _lfk goto LockFinder_ask
+if "%_lfk%"=="0" goto MenuTools
+set "_lok="
+for /l %%I in (1,1,%_lfn%) do if "%_lfk%"=="%%I" set "_lok=1"
+if not defined _lok goto LockFinder_ask
+if /i "!_lfcrit[%_lfk%]!"=="critical" (
+    echo.
+    echo  [BLOCKED] !_lfnm[%_lfk%]! is a critical Windows process. Closing it would crash
+    echo            or freeze Windows. Reboot to release the file instead.
+    goto LockFinder_ask
+)
+echo.
+echo  About to force-close:  PID !_lfpid[%_lfk%]!  -  !_lfnm[%_lfk%]!
+echo  Any unsaved work in that program will be LOST. This does not delete the file.
+set "_lc="
+set /p "_lc=Proceed? (Y/N): "
+if /i not "%_lc%"=="Y" goto LockFinder_ask
+call :Run "taskkill /PID !_lfpid[%_lfk%]! /F"
+echo.
+echo  If it closed, the file should now be free. Re-checking...
+echo.
+del "%_lflist%" >nul 2>&1
+call :LockWorker list "%_lfpath%"
+set "_lfn2=0"
+if exist "%_lflist%" ( for /f "usebackq tokens=1 delims=|" %%a in ("%_lflist%") do set /a _lfn2+=1 )
+del "%_lflist%" >nul 2>&1
+if "%_lfn2%"=="0" (
+    echo  [OK] Nothing is holding the file now.
+) else (
+    echo  [NOTE] %_lfn2% process^(es^) still hold it - it may have relaunched, or another
+    echo         program opened it. Re-run to see the current list.
+)
+pause
+goto MenuTools
+
+:_lfShow
+rem %1 = 1-based index; prints one aligned row (# / pid / type / name).
+set "_r1=%1.    "
+set "_r1=!_r1:~0,5!"
+set "_r2=!_lfpid[%1]!        "
+set "_r2=!_r2:~0,8!"
+set "_r3=!_lfcrit[%1]!            "
+set "_r3=!_r3:~0,12!"
+set "_r4=!_lfnm[%1]!"
+echo   !_r1!!_r2!!_r3!!_r4:~0,52!
+goto :eof
+
+:LockWorker
+rem  %1 = list   %2 = file path.  One minimized PS worker (font/locale-safe, same
+rem  pattern as the other workers). Calls the Restart Manager: RmStartSession ->
+rem  RmRegisterResources(file) -> RmGetList, which returns the processes holding the
+rem  file. ApplicationType == RmCritical (1000) marks a core Windows process; those are
+rem  reported as "critical" and the batch refuses to close them. Process names are
+rem  ASCII-forced for display; the PID drives any close, so the name never has to
+rem  round-trip through cmd.
+set "PT_LF_LIST=%_lflist%"
+set "PT_LF_FILE=%~2"
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $sig='using System;using System.Runtime.InteropServices;namespace PTR{[StructLayout(LayoutKind.Sequential)]public struct RUP{public int pid;public System.Runtime.InteropServices.ComTypes.FILETIME ft;}public enum AT{Unknown=0,MainWindow=1,OtherWindow=2,Service=3,Explorer=4,Console=5,Critical=1000}[StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]public struct PI{public RUP Process;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=256)]public string app;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=64)]public string svc;public AT AppType;public uint Status;public uint Sess;[MarshalAs(UnmanagedType.Bool)]public bool restart;}public static class Rm{[DllImport(\"rstrtmgr.dll\",CharSet=CharSet.Unicode)]public static extern int RmStartSession(out uint h,int f,string k);[DllImport(\"rstrtmgr.dll\")]public static extern int RmEndSession(uint h);[DllImport(\"rstrtmgr.dll\",CharSet=CharSet.Unicode)]public static extern int RmRegisterResources(uint h,uint nf,string[] fs,uint na,RUP[] a,uint ns,string[] s);[DllImport(\"rstrtmgr.dll\")]public static extern int RmGetList(uint h,out uint need,ref uint have,[In,Out]PI[] arr,ref uint reason);}}'; try{ Add-Type -TypeDefinition $sig -Language CSharp }catch{ exit 3 }; $file=$env:PT_LF_FILE; $key=[Guid]::NewGuid().ToString(); $h=0; if([PTR.Rm]::RmStartSession([ref]$h,0,$key) -ne 0){ @() | Out-File -FilePath $env:PT_LF_LIST -Encoding ASCII; exit 0 }; $out=@(); try{ if([PTR.Rm]::RmRegisterResources($h,1,@($file),0,$null,0,$null) -ne 0){ throw }; [uint32]$need=0;[uint32]$have=0;[uint32]$reason=0; $rc=[PTR.Rm]::RmGetList($h,[ref]$need,[ref]$have,$null,[ref]$reason); if($need -gt 0){ $arr=[PTR.PI[]]::new($need); $have=$need; $rc=[PTR.Rm]::RmGetList($h,[ref]$need,[ref]$have,$arr,[ref]$reason); if($rc -eq 0){ $i=0; for($j=0;$j -lt [int]$have;$j++){ $p=$arr[$j]; $i++; $nm=$p.app; if(-not $nm){ $nm='(pid '+$p.Process.pid+')' }; $dn=$nm -replace '[^\x20-\x7e]','?'; $crit=if($p.AppType -eq [PTR.AT]::Critical){'critical'}else{'normal'}; $out+=(''+$i+'|'+$p.Process.pid+'|'+$crit+'|'+$dn+'|') } } } }catch{}; [PTR.Rm]::RmEndSession($h) | Out-Null; $out | Out-File -FilePath $env:PT_LF_LIST -Encoding ASCII; exit 0"
+set "_lwrc=%errorlevel%"
+set "PT_LF_LIST=" & set "PT_LF_FILE="
+exit /b %_lwrc%
+
+:BackupSingleValue
+rem  %1 = key  %2 = value  %3 = description
+rem  Whole-KEY .reg backup for the PATH editor, via reg export. Sets _BSV_OK=1 only when
+rem  a real backup file actually landed, so the caller can refuse to edit without one.
+rem
+rem  Deliberately NOT :BackupValueLine, the echo-based writer every tweak uses. That one
+rem  only knows REG_DWORD and REG_SZ and honestly declines everything else - which is
+rem  correct for the tweaks, since they are all DWORDs. But PATH is REG_EXPAND_SZ - that
+rem  is the entire point of the PATH editor - so it fell straight into the decline branch:
+rem  the .reg got a "not auto-restorable" comment while the screen still printed [BACKUP].
+rem  A comment is not an undo, and PATH is the one value here you most need to put back.
+rem
+rem  reg export is exact for every type (expand_sz, multi_sz, unicode data) and needs no
+rem  escaping, so the value never passes through batch string handling at all. That also
+rem  closes the one place a PATH entry holding "!" could be eaten by delayed expansion -
+rem  a folder named C:\Foo!Bar is perfectly legal.
+rem
+rem  It exports the whole key rather than the single value. For Environment that is a
+rem  handful of variables, and putting the key back as it was seconds ago IS the undo.
+setlocal EnableDelayedExpansion
+set "_key=%~1"
+set "_val=%~2"
+set "_desc=%~3"
+set "_safe=!_key:\=_!"
+set "_safe=!_safe::=!"
+set "_safe=!_safe: =_!"
+set "_bkp=%BACKUP_DIR%\!_safe!_%RANDOM%%RANDOM%.reg"
+set "_rk=!_key!"
+set "_rk=!_rk:HKLM\=HKEY_LOCAL_MACHINE\!"
+set "_rk=!_rk:HKCU\=HKEY_CURRENT_USER\!"
+del "!_bkp!" >nul 2>&1
+reg export "!_rk!" "!_bkp!" /y >nul 2>&1
+if errorlevel 1 goto _bsvFail
+if not exist "!_bkp!" goto _bsvFail
+echo   [BACKUP] !_desc! -^> !_bkp!
+call :Log "PATHBACKUP !_key! !_val! -> !_bkp!"
+endlocal & set "_BSV_OK=1" & goto :eof
+:_bsvFail
+echo   [ERROR] Could not write a backup of !_key!.
+call :Log "FAIL: PATHBACKUP !_key! !_val!"
+endlocal & set "_BSV_OK=" & goto :eof
+
+rem =====================================================================================
+rem  HARDWARE PROBE: system disk media type (for the SysMain advisory)
+rem =====================================================================================
+:DetectSysDisk
+rem  Sets SYSDISK=ssd|hdd|unknown. Probed lazily, right before the SysMain prompt, and
+rem  cached - deliberately NOT at startup like MACHINE: that detection is a pure reg
+rem  query and instant, and no run should pay a PowerShell launch to answer a question
+rem  most runs never ask.
+rem
+rem  Asks the disk directly, via IOCTL_STORAGE_QUERY_PROPERTY with
+rem  StorageDeviceSeekPenaltyProperty - "does this device incur a seek penalty?" is
+rem  literally the SSD-vs-spinning question, and it is what Windows itself uses. The
+rem  volume is opened with 0 access (query only, no read rights, no elevation needed).
+rem
+rem  It does NOT go through Get-PhysicalDisk / Get-Partition, and that is the whole
+rem  point. Those live in the root\Microsoft\Windows\Storage CIM namespace, and per
+rem  Microsoft they enumerate "across any available Storage Management Providers" - so
+rem  ONE broken vendor storage provider makes every cmdlet in that namespace throw. That
+rem  is not hypothetical: on a test machine (HP Omen, NVMe SSD) Get-Partition,
+rem  Get-PhysicalDisk and even raw Get-CimInstance MSFT_PhysicalDisk all failed with
+rem  CimException "Invalid property", while this IOCTL answered correctly and instantly.
+rem  OEM laptops ship those providers as standard, so this is a common case, not an edge.
+rem
+rem  Failure stays safe: if the device cannot answer, SYSDISK stays "unknown" and the
+rem  advisory this feeds is warning-only - a miss costs a hint, never a changed default
+rem  or a blocked action.
+if defined SYSDISK goto :eof
+set "SYSDISK=unknown"
+set "_sdres=%TEMP%\pt_sdisk_%RANDOM%.txt"
+del "%_sdres%" >nul 2>&1
+set "PT_SD_RES=%_sdres%"
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $t='unknown'; $dl=if($env:SystemDrive){ $env:SystemDrive.Substring(0,1) }else{ 'C' }; try{ $sig='using System;using System.Runtime.InteropServices;namespace PTDisk{[StructLayout(LayoutKind.Sequential)]public struct SPQ{public uint PropertyId;public uint QueryType;[MarshalAs(UnmanagedType.ByValArray,SizeConst=1)]public byte[] AdditionalParameters;}[StructLayout(LayoutKind.Sequential)]public struct DSPD{public uint Version;public uint Size;[MarshalAs(UnmanagedType.U1)]public bool IncursSeekPenalty;}public static class N{[DllImport(\"kernel32.dll\",SetLastError=true,CharSet=CharSet.Auto)]public static extern IntPtr CreateFile(string n,uint a,uint s,IntPtr sec,uint d,uint f,IntPtr t);[DllImport(\"kernel32.dll\",SetLastError=true)]public static extern bool DeviceIoControl(IntPtr h,uint c,ref SPQ i,uint isz,ref DSPD o,uint osz,ref uint r,IntPtr ov);[DllImport(\"kernel32.dll\",SetLastError=true)]public static extern bool CloseHandle(IntPtr h);}}'; Add-Type -TypeDefinition $sig -Language CSharp; $h=[PTDisk.N]::CreateFile('\\.\'+$dl+':',0,3,[IntPtr]::Zero,3,0,[IntPtr]::Zero); if($h -ne [IntPtr]::new(-1)){ $q=New-Object PTDisk.SPQ; $q.PropertyId=7; $q.QueryType=0; $q.AdditionalParameters=New-Object byte[] 1; $d=New-Object PTDisk.DSPD; $ret=0; if([PTDisk.N]::DeviceIoControl($h,0x2D1400,[ref]$q,[uint32][Runtime.InteropServices.Marshal]::SizeOf($q),[ref]$d,[uint32][Runtime.InteropServices.Marshal]::SizeOf($d),[ref]$ret,[IntPtr]::Zero)){ if($d.IncursSeekPenalty){ $t='hdd' }else{ $t='ssd' } }; [void][PTDisk.N]::CloseHandle($h) } }catch{}; if($t -eq 'unknown'){ try{ $n=(Get-Partition -DriveLetter $dl -ErrorAction Stop).DiskNumber; $pd=@(Get-PhysicalDisk -ErrorAction Stop | Where-Object { [string]$_.DeviceId -eq [string]$n }); if($pd.Count -ge 1){ $m=[string]$pd[0].MediaType; if($m -eq 'SSD'){ $t='ssd' } elseif($m -eq 'HDD'){ $t='hdd' } } }catch{} }; $t | Out-File -FilePath $env:PT_SD_RES -Encoding ASCII"
+set "PT_SD_RES="
+rem  The MediaType fallback inside the worker only runs when the IOCTL could not answer,
+rem  and every failure path is caught - so it can only ever turn an "unknown" into a real
+rem  answer, never the reverse. The IOCTL is the verified path; the fallback is untested
+rem  belt-and-braces for a device that does not implement the query.
+if exist "%_sdres%" for /f "usebackq tokens=1" %%T in ("%_sdres%") do set "SYSDISK=%%T"
+del "%_sdres%" >nul 2>&1
+call :Log "System disk media type: %SYSDISK%"
+goto :eof
+
+:DiskAdvisory
+rem  Hardware advisory for the SysMain knob - same contract as :LaptopAdvisory: it warns
+rem  and nothing else. Never blocks, never changes a prompt default, never alters what a
+rem  preset applies. SysMain genuinely helps a mechanical disk, so the hint appears
+rem  whenever the probe did NOT positively identify an SSD.
+if /i "%SYSDISK%"=="ssd" goto :eof
+if /i "%SYSDISK%"=="hdd" (
+    echo   [ADVISORY] The Windows disk looks like a mechanical HDD - SysMain really does
+    echo              help there. Leaving it enabled is the better call.
+    goto :eof
+)
+echo   [ADVISORY] Could not identify the Windows disk type - if it is a mechanical HDD,
+echo              leave SysMain enabled; it mainly helps spinning disks.
+goto :eof
+
+rem =====================================================================================
+rem  PRIVACY HELPERS: extra telemetry tasks, and the DiagTrack firewall block
+rem =====================================================================================
+:DisableTelemetryTasks
+rem  Disables a small vetted set of telemetry scheduled tasks BY NAME, not by folder path.
+rem  That is deliberate: schtasks /Change needs a task's full path, an unverified path
+rem  fails quietly, and the run would still look clean while the task stayed enabled.
+rem  Get-ScheduledTask finds each task wherever Windows keeps it, and the worker returns
+rem  "found disabled checked" so the report below can tell "not present on this edition"
+rem  apart from "could not disable" instead of calling either one a success.
+rem  Only the DiskDiagnostic *DataCollector* is listed - the one that uploads drive SMART
+rem  data. Never the DiskDiagnostic *Resolver*: that is what warns you about a dying disk.
+set "_tkres=%TEMP%\pt_tasks_%RANDOM%.txt"
+del "%_tkres%" >nul 2>&1
+set "PT_TK_RES=%_tkres%"
+set "PT_TK_NAMES=MareBackup|StartupAppTask|Microsoft-Windows-DiskDiagnosticDataCollector|MapsToastTask"
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $names=@($env:PT_TK_NAMES -split '\|'); $found=0; $ok=0; foreach($n in $names){ if($n){ $ts=@(Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue); foreach($t in $ts){ $found++; try{ Disable-ScheduledTask -InputObject $t -ErrorAction Stop | Out-Null; $ok++ }catch{} } } }; (''+$found+' '+$ok+' '+$names.Count) | Out-File -FilePath $env:PT_TK_RES -Encoding ASCII"
+set "PT_TK_RES=" & set "PT_TK_NAMES="
+set "_tkf=0" & set "_tko=0" & set "_tkn=0"
+if exist "%_tkres%" for /f "usebackq tokens=1,2,3" %%a in ("%_tkres%") do ( set "_tkf=%%a" & set "_tko=%%b" & set "_tkn=%%c" )
+del "%_tkres%" >nul 2>&1
+if "!_tkf!"=="0" (
+    echo   [SKIP] Extra telemetry tasks: none of the !_tkn! exist on this edition.
+    call :Log "TASKS extra: none of !_tkn! present"
+    goto :eof
+)
+if "!_tko!"=="0" (
+    echo         [FAIL] Extra telemetry tasks: found !_tkf! but disabled none - run as Administrator.
+    call :Log "FAIL: TASKS extra found=!_tkf! disabled=0"
+    if defined _RUNTRACK if "%_ELEV%"=="0" set /a _FAILS+=1
+    goto :eof
+)
+echo   [OK] Extra telemetry tasks: disabled !_tko! of !_tkf! found.
+call :Log "OK: TASKS extra found=!_tkf! disabled=!_tko!"
+goto :eof
+
+:DiagTrackFirewall
+rem  Blocks the telemetry service's outbound traffic by flipping Windows' OWN built-in
+rem  DiagTrack firewall rule group from Allow to Block - the same thing Sophia does, and
+rem  the reason this is not a hand-written netsh rule: the rules already ship with
+rem  Windows, so there is nothing to invent, nothing to name, and nothing to clean up.
+rem  The service is already stopped and disabled by :DoPrivacyCore; this is the
+rem  belt-and-braces half for the case where a Windows update re-enables it.
+rem  To undo, one line in an elevated PowerShell, no pipe needed:
+rem      Set-NetFirewallRule -Group DiagTrack -Action Allow
+set "_fwres=%TEMP%\pt_fw_%RANDOM%.txt"
+del "%_fwres%" >nul 2>&1
+set "PT_FW_RES=%_fwres%"
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $r=@(Get-NetFirewallRule -Group DiagTrack -ErrorAction SilentlyContinue); $n=0; foreach($x in $r){ try{ Set-NetFirewallRule -InputObject $x -Enabled True -Action Block -ErrorAction Stop; $n++ }catch{} }; (''+$n+' '+$r.Count) | Out-File -FilePath $env:PT_FW_RES -Encoding ASCII"
+set "PT_FW_RES="
+set "_fwn=0" & set "_fwc=0"
+if exist "%_fwres%" for /f "usebackq tokens=1,2" %%a in ("%_fwres%") do ( set "_fwn=%%a" & set "_fwc=%%b" )
+del "%_fwres%" >nul 2>&1
+if "!_fwc!"=="0" (
+    echo   [SKIP] Telemetry firewall: this Windows has no DiagTrack rule group - nothing to block.
+    call :Log "FW DiagTrack: no rules present"
+    goto :eof
+)
+if "!_fwn!"=="0" (
+    echo         [FAIL] Telemetry firewall: found !_fwc! rule^(s^) but changed none - run as Administrator.
+    call :Log "FAIL: FW DiagTrack found=!_fwc! blocked=0"
+    if defined _RUNTRACK if "%_ELEV%"=="0" set /a _FAILS+=1
+    goto :eof
+)
+echo   [OK] Telemetry firewall: blocked !_fwn! of !_fwc! DiagTrack rule^(s^).
+call :Log "OK: FW DiagTrack found=!_fwc! blocked=!_fwn!"
+goto :eof
+
+rem =====================================================================================
+rem  HELPER: prove a cleanup root before anything is deleted under it
+rem =====================================================================================
+:CleanRoot
+rem  %1 = environment variable NAME (used in the message)   %2 = its expanded value
+rem  Sets _clean<NAME>=1 only when it is safe to delete underneath. Otherwise the flag is
+rem  left undefined - so every gated delete in :DoCleanupCore simply does not run - and
+rem  the reason is printed, so a skipped cleanup is visible instead of silent.
+rem
+rem  Three things have to hold, and each one maps to a real way this goes wrong:
+rem    defined     - an unset variable expands to nothing, turning "%%VAR%%\*.*" into
+rem                  "\*.*": the current drive root.
+rem    a directory - a variable pointing at a deleted or never-created folder.
+rem    not a root  - %%TEMP%%=C:\ is not hypothetical enough to ignore: it turns the very
+rem                  first delete into "del /f /s /q ""C:\*.*""" with /s still attached.
+rem  The value is compared with delayed expansion, so a folder containing ) or ^& - say
+rem  "C:\Program Files (x86)\..." - cannot break out of the if-block either.
+set "_crv=%~2"
+if not defined _crv (
+    echo   [SKIP] %~1 is not set in this environment - nothing under it was touched.
+    call :Log "SKIP cleanup root %~1: undefined or empty"
+    goto :eof
+)
+if not exist "!_crv!\" (
+    echo   [SKIP] %~1 does not point at a folder that exists ^(!_crv!^) - nothing under it
+    echo          was touched.
+    call :Log "SKIP cleanup root %~1: not a directory: !_crv!"
+    goto :eof
+)
+if "!_crv:~3!"=="" (
+    echo   [SKIP] %~1 is a drive root ^(!_crv!^) - refusing to delete from the root of a
+    echo          drive. Nothing under it was touched.
+    call :Log "SKIP cleanup root %~1: drive root: !_crv!"
+    goto :eof
+)
+set "_clean%~1=1"
+goto :eof
 
 :Run
 rem %1 = full command line (echoed, logged, run via cmd /s /c)
