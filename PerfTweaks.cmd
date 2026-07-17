@@ -2000,9 +2000,16 @@ echo  Type or paste the full path to the file ^(e.g. a DLL or document you canno
 set "_lfpath="
 set /p "_lfpath=File path (blank = back): "
 if not defined _lfpath goto MenuTools
+rem  FIX (crash): this printed %_lfpath% - percent-expanded at PARSE time, before cmd
+rem  even evaluates the condition, and before the block structure is worked out. A path
+rem  like C:\Program Files (x86)\Steam\steam.exe therefore injected a bare ")" into the
+rem  block and killed the whole script with "was unexpected at this time" - whether or
+rem  not the file existed. !_lfpath! expands at RUN time, after the block is parsed, so
+rem  the parens are just data. This is the same class as the hosts-restore crash; the
+rem  analyzer cannot see it because the ")" arrives through a variable.
 if not exist "%_lfpath%" (
     echo.
-    echo  [ERROR] No such file: %_lfpath%
+    echo  [ERROR] No such file: !_lfpath!
     echo          Give the full path to an existing file.
     echo.
     pause
@@ -2051,19 +2058,25 @@ if "%_lfk%"=="0" goto MenuTools
 set "_lok="
 for /l %%I in (1,1,%_lfn%) do if "%_lfk%"=="%%I" set "_lok=1"
 if not defined _lok goto LockFinder_ask
-if /i "!_lfcrit[%_lfk%]!"=="critical" (
+rem  _lfk came off set /p, so until this point it could hold anything. The loop above
+rem  proves it is one of 1..N - a plain integer. Copy the PROVEN value into _lfi and
+rem  index with that from here on, so no line below percent-expands raw user input into
+rem  a block, where a ")" in the value would end the block early and abort the script.
+rem  Same reason :LockFinder prints !_lfpath! and not %_lfpath%.
+set "_lfi=%_lfk%"
+if /i "!_lfcrit[%_lfi%]!"=="critical" (
     echo.
-    echo  [BLOCKED] !_lfnm[%_lfk%]! is a critical Windows process. Closing it would crash
+    echo  [BLOCKED] !_lfnm[%_lfi%]! is a critical Windows process. Closing it would crash
     echo            or freeze Windows. Reboot to release the file instead.
     goto LockFinder_ask
 )
 echo.
-echo  About to force-close:  PID !_lfpid[%_lfk%]!  -  !_lfnm[%_lfk%]!
+echo  About to force-close:  PID !_lfpid[%_lfi%]!  -  !_lfnm[%_lfi%]!
 echo  Any unsaved work in that program will be LOST. This does not delete the file.
 set "_lc="
 set /p "_lc=Proceed? (Y/N): "
 if /i not "%_lc%"=="Y" goto LockFinder_ask
-call :Run "taskkill /PID !_lfpid[%_lfk%]! /F"
+call :Run "taskkill /PID !_lfpid[%_lfi%]! /F"
 echo.
 echo  If it closed, the file should now be free. Re-checking...
 echo.
@@ -2197,7 +2210,15 @@ rem  Hardware advisory for the SysMain knob - same contract as :LaptopAdvisory: 
 rem  and nothing else. Never blocks, never changes a prompt default, never alters what a
 rem  preset applies. SysMain genuinely helps a mechanical disk, so the hint appears
 rem  whenever the probe did NOT positively identify an SSD.
-if /i "%SYSDISK%"=="ssd" goto :eof
+rem  A confirmed SSD gets a positive line rather than silence. The advisory contract is
+rem  unchanged - this warns about nothing and blocks nothing - but silence was
+rem  indistinguishable from "the probe never ran", which is exactly the doubt the whole
+rem  probe exists to remove.
+if /i "%SYSDISK%"=="ssd" (
+    echo   [i] Windows disk: SSD - SysMain has little to offer here, so turning it off
+    echo       is a reasonable call. No caveat applies.
+    goto :eof
+)
 if /i "%SYSDISK%"=="hdd" (
     echo   [ADVISORY] The Windows disk looks like a mechanical HDD - SysMain really does
     echo              help there. Leaving it enabled is the better call.
@@ -2586,7 +2607,7 @@ reg export HKCU "%_rbHKCU%" /y >nul 2>&1
 if errorlevel 1 set "_rbOK=0"
 if not exist "%_rbHKCU%" set "_rbOK=0"
 if "%_rbOK%"=="1" (
-    echo [OK] Saved to %BACKUP_DIR%
+    echo [OK] Saved to !BACKUP_DIR!
     call :Log "OK: full registry export -> %_rbHKLM% , %_rbHKCU%"
 ) else (
     echo [ERROR] Full registry backup FAILED or is incomplete - do NOT rely on it.
@@ -3165,7 +3186,7 @@ for /f "delims=" %%F in ('dir /b /o-d "%BACKUP_DIR%\Preset_*.json" 2^>nul') do (
 )
 if "%_rn%"=="0" (
     echo  No preset JSON backups were found in:
-    echo     %BACKUP_DIR%
+    echo     !BACKUP_DIR!
     echo.
     pause
     goto MenuBackups
@@ -3236,7 +3257,7 @@ for /f "delims=" %%F in ('dir /b /a-d /o-d "%BACKUP_DIR%\*.reg" 2^>nul ^| findst
 )
 if "%_qn%"=="0" (
     echo  No per-value .reg backups were found in:
-    echo     %BACKUP_DIR%
+    echo     !BACKUP_DIR!
     echo.
     pause
     goto MenuBackups
