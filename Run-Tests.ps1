@@ -657,6 +657,523 @@ Invoke-Test 'Machine class detected at startup; advisories warning-only and pre-
     Assert-True ($di -ge 0 -and $qi -ge 0 -and $di -lt $qi) ':Performance no longer shows :DesktopAdvisory before the LargeSystemCache prompt.'
 }
 
+# ===============================================================================
+# 31. System tools menu is wired (Pass 1): the main menu offers 12, the
+#     dispatcher routes it, and the submenu routes to both tools and back.
+# ===============================================================================
+Invoke-Test 'System tools menu reachable and wired' {
+    $cmd = Read-Lines $CmdPath
+    $text = ($cmd -join "`n")
+    Assert-True ($text -match '(?m)^if "%sel%"=="12" goto MenuTools\s*$') 'Main-menu dispatcher does not route 12 -> MenuTools.'
+    $mtText = (Get-RoutineBody -Lines $cmd -Label 'MenuTools_ask') -join "`n"
+    Assert-True ($mtText -match '(?i)if "%sel%"=="1" goto PathEditor') 'MenuTools does not route 1 -> PathEditor.'
+    Assert-True ($mtText -match '(?i)if "%sel%"=="2" goto LockFinder') 'MenuTools does not route 2 -> LockFinder.'
+    Assert-True ($mtText -match '(?i)if "%sel%"=="0" goto MainMenu') 'MenuTools has no 0 -> back to MainMenu.'
+}
+
+# ===============================================================================
+# 32. PATH editor never INVOKES setx (Pass 1). setx silently crops PATH at 1024
+#     chars and rewrites REG_EXPAND_SZ as REG_SZ - the exact damage this feature
+#     exists to avoid. A mention in an explanatory echo is fine; execution is not.
+# ===============================================================================
+Invoke-Test 'PATH editor never invokes setx' {
+    $cmd = Read-Lines $CmdPath
+    foreach ($lab in 'PathEditor','PathEditor_show','PathEditor_ask','PathEditor_add','PathEditor_remove','PathEditor_run','PathWorker') {
+        foreach ($line in (Get-RoutineBody -Lines $cmd -Label $lab)) {
+            $t = $line.Trim()
+            if ($t -match '^(?i)(echo|rem)\b') { continue }
+            Assert-True ($t -notmatch '(?i)\bsetx\b') ("PATH feature INVOKES setx in :" + $lab + ": " + $t)
+        }
+    }
+}
+
+# ===============================================================================
+# 33. PATH worker round-trips REG_EXPAND_SZ (Pass 1): reads raw with
+#     DoNotExpandEnvironmentNames (so %VAR% survives) and writes ExpandString
+#     (so the type PATH requires is preserved).
+# ===============================================================================
+Invoke-Test 'PATH worker preserves REG_EXPAND_SZ (read raw, write ExpandString)' {
+    $cmd = Read-Lines $CmdPath
+    $pw = (Get-RoutineBody -Lines $cmd -Label 'PathWorker') -join "`n"
+    Assert-True ($pw -match 'DoNotExpandEnvironmentNames') 'PATH worker does not read with DoNotExpandEnvironmentNames - %VAR% references would be lost.'
+    Assert-True ($pw -match 'RegistryValueKind\]::ExpandString') 'PATH worker does not write ExpandString - PATH would be downgraded to REG_SZ.'
+}
+
+# ===============================================================================
+# 34. PATH worker advertises the change (Pass 1): the WM_SETTINGCHANGE broadcast
+#     must be INVOKED at the call site - SendMessageTimeout(HWND_BROADCAST 0xffff,
+#     0x1A, ...) - not merely declared in the P/Invoke signature.
+# ===============================================================================
+Invoke-Test 'PATH worker broadcasts WM_SETTINGCHANGE on change' {
+    $cmd = Read-Lines $CmdPath
+    $pw = (Get-RoutineBody -Lines $cmd -Label 'PathWorker') -join "`n"
+    Assert-True ($pw -match '(?i)SendMessageTimeout\(\[IntPtr\]0xffff\s*,\s*0x1A') 'PATH worker does not INVOKE SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, ...).'
+}
+
+# ===============================================================================
+# 35. PATH edits back up first (Pass 1): :PathEditor_run must call
+#     :BackupSingleValue BEFORE :PathWorker performs the write.
+# ===============================================================================
+Invoke-Test 'PATH edit backs up the value before writing' {
+    $cmd = Read-Lines $CmdPath
+    $run = Get-RoutineBody -Lines $cmd -Label 'PathEditor_run'
+    $bkIdx = -1; $wkIdx = -1
+    for ($i = 0; $i -lt $run.Count; $i++) {
+        if ($bkIdx -lt 0 -and $run[$i] -match '(?i)call :BackupSingleValue') { $bkIdx = $i }
+        if ($wkIdx -lt 0 -and $run[$i] -match '(?i)call :PathWorker')        { $wkIdx = $i }
+    }
+    Assert-True ($bkIdx -ge 0) ':PathEditor_run never calls :BackupSingleValue - an edit would have no undo.'
+    Assert-True ($wkIdx -ge 0) ':PathEditor_run never calls :PathWorker - nothing performs the edit.'
+    Assert-True ($bkIdx -lt $wkIdx) ':PathEditor_run backs up AFTER the write - the backup must come first.'
+}
+
+# ===============================================================================
+# 36. The PATH backup must be a real backup. :BackupValueLine - the echo-based
+#     writer every tweak uses - only knows REG_DWORD and REG_SZ and honestly
+#     declines the rest. That is right for the tweaks (all DWORDs), but PATH is
+#     REG_EXPAND_SZ, so routing PATH through it wrote a "not auto-restorable"
+#     COMMENT into the .reg while the screen still printed [BACKUP]. A comment is
+#     not an undo. :BackupSingleValue therefore uses reg export, which is exact for
+#     every type and never passes the value through batch string handling at all
+#     (so a PATH entry containing "!" cannot be eaten by delayed expansion either).
+# ===============================================================================
+Invoke-Test 'PATH backup is a real backup, not a decline comment' {
+    $cmd = Read-Lines $CmdPath
+    $body = Get-RoutineBody -Lines $cmd -Label 'BackupSingleValue'
+    $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+
+    Assert-True ($code -match '(?i)reg export "!_rk!" "!_bkp!"') ':BackupSingleValue no longer uses reg export - the only writer here that handles REG_EXPAND_SZ.'
+    Assert-True ($code -notmatch '(?i)call :BackupValueLine') ':BackupSingleValue routes PATH through :BackupValueLine again. PATH is REG_EXPAND_SZ, which that writer declines - the backup would be a comment.'
+    Assert-True ($code -match '(?i)if not exist "!_bkp!" goto _bsvFail') ':BackupSingleValue does not verify the backup file landed before claiming [BACKUP].'
+    Assert-True ($code -match '(?i)if errorlevel 1 goto _bsvFail') ':BackupSingleValue ignores reg export failing.'
+    Assert-True ($code -match '(?i)set "_BSV_OK=1"') ':BackupSingleValue never signals success, so the caller cannot gate on it.'
+
+    # ...and the tweak writer keeps its own decline, since :SafeRegAdd still uses it
+    $bvl = (Get-RoutineBody -Lines $cmd -Label 'BackupValueLine') -join "`n"
+    Assert-True ($bvl -match 'not auto-restorable') ':BackupValueLine lost its non-ASCII honest-decline marker.'
+}
+
+# ===============================================================================
+# 37. No backup, no edit. :ApplyHosts already refuses to overwrite the system
+#      hosts file unless its backup landed (test 18); a PATH edit is the same
+#      bargain, and PATH is not something a user can reconstruct from memory.
+# ===============================================================================
+Invoke-Test 'PATH edit aborts when no backup could be written' {
+    $cmd = Read-Lines $CmdPath
+    $run = Get-RoutineBody -Lines $cmd -Label 'PathEditor_run'
+    $clr = -1; $bk = -1; $gate = -1; $wk = -1
+    for ($i = 0; $i -lt $run.Count; $i++) {
+        if ($clr  -lt 0 -and $run[$i] -match '(?i)^\s*set "_BSV_OK="')        { $clr = $i }
+        if ($bk   -lt 0 -and $run[$i] -match '(?i)call :BackupSingleValue')    { $bk = $i }
+        if ($gate -lt 0 -and $run[$i] -match '(?i)if not defined _BSV_OK')     { $gate = $i }
+        if ($wk   -lt 0 -and $run[$i] -match '(?i)call :PathWorker')           { $wk = $i }
+    }
+    Assert-True ($clr -ge 0)  ':PathEditor_run does not clear _BSV_OK first - a stale 1 from an earlier edit would wave a failed backup through.'
+    Assert-True ($bk -ge 0)   ':PathEditor_run never calls :BackupSingleValue.'
+    Assert-True ($gate -ge 0) ':PathEditor_run does not check _BSV_OK - it would edit PATH with no undo.'
+    Assert-True ($wk -ge 0)   ':PathEditor_run never calls :PathWorker.'
+    Assert-True ($clr -lt $bk -and $bk -lt $gate -and $gate -lt $wk) ':PathEditor_run has the order wrong - clear, back up, check, THEN edit.'
+    Assert-True ((($run[$gate..$wk]) -join "`n") -match '(?i)goto :eof') ':PathEditor_run does not actually bail out when the backup is missing.'
+}
+
+# ===============================================================================
+# 38. System-PATH edits are elevation-gated (Pass 1): the combined
+#     machine-scope + not-elevated check must exist on one guard line, so a
+#     non-admin save is refused up front instead of failing silently.
+# ===============================================================================
+Invoke-Test 'System PATH edit is gated on elevation' {
+    $cmd = Read-Lines $CmdPath
+    $gate = @($cmd | Where-Object { $_ -match '(?i)"%PT_PE_SCOPE%"=="machine"\s+if\s+"%_ELEV%"=="0"' })
+    Assert-True ($gate.Count -ge 1) ':PathEditor_show does not gate machine-scope edits on _ELEV.'
+}
+
+# ===============================================================================
+# 39. Lock finder uses the Restart Manager (Pass 1): the RM calls must be WIRED
+#     (::RmStartSession( / ::RmRegisterResources( / ::RmGetList( invocations, not
+#     just P/Invoke declarations), and neither openfiles nor handle.exe appears.
+# ===============================================================================
+Invoke-Test 'Lock finder uses Restart Manager, not openfiles/handle.exe' {
+    $cmd = Read-Lines $CmdPath
+    $lw = (Get-RoutineBody -Lines $cmd -Label 'LockWorker') -join "`n"
+    Assert-True ($lw -match '(?i)::RmStartSession\(')      'LockWorker does not INVOKE RmStartSession.'
+    Assert-True ($lw -match '(?i)::RmRegisterResources\(') 'LockWorker does not INVOKE RmRegisterResources.'
+    Assert-True ($lw -match '(?i)::RmGetList\(')           'LockWorker does not INVOKE RmGetList.'
+    # NB: Get-RoutineBody returns ,$arr - collecting via a pipeline keeps each result
+    # as a String[] object and -join would stringify them as 'System.String[]'.
+    # Concatenate the arrays directly instead.
+    $lfAll = ((Get-RoutineBody -Lines $cmd -Label 'LockFinder') + (Get-RoutineBody -Lines $cmd -Label 'LockFinder_ask') + (Get-RoutineBody -Lines $cmd -Label 'LockWorker')) -join "`n"
+    Assert-True ($lfAll -notmatch '(?i)\bopenfiles\b') 'Lock finder uses openfiles (needs a global flag + reboot).'
+    Assert-True ($lfAll -notmatch '(?i)handle\.exe')   'Lock finder shells out to handle.exe (external dependency).'
+}
+
+# ===============================================================================
+# 40. Critical-process refusal (Pass 1): the worker classifies RmCritical (1000)
+#     and the menu BLOCKS a close on a critical row.
+# ===============================================================================
+Invoke-Test 'Lock finder refuses to kill critical system processes' {
+    $cmd = Read-Lines $CmdPath
+    $lw = (Get-RoutineBody -Lines $cmd -Label 'LockWorker') -join "`n"
+    Assert-True ($lw -match 'Critical' -and $lw -match '1000') 'LockWorker does not classify RmCritical (1000).'
+    $ask = (Get-RoutineBody -Lines $cmd -Label 'LockFinder_ask') -join "`n"
+    Assert-True ($ask -match '(?i)_lfcrit\[%_lfk%\]!"=="critical"') ':LockFinder_ask does not block a close on a critical process.'
+    Assert-True ($ask -match '(?i)BLOCKED') ':LockFinder_ask has no BLOCKED message for a critical process.'
+}
+
+# ===============================================================================
+# 41. Close is opt-in, per-PID, taskkill (Pass 1): one confirmed PID via
+#     taskkill /PID, never RmShutdown (which shuts down every registered app).
+# ===============================================================================
+Invoke-Test 'Lock finder terminates one PID via taskkill, not RmShutdown' {
+    $cmd = Read-Lines $CmdPath
+    $lf = ((Get-RoutineBody -Lines $cmd -Label 'LockFinder') + (Get-RoutineBody -Lines $cmd -Label 'LockFinder_ask')) -join "`n"
+    $lw = (Get-RoutineBody -Lines $cmd -Label 'LockWorker') -join "`n"
+    Assert-True ($lf -match '(?i)taskkill /PID') 'Lock finder does not use taskkill /PID for the opt-in close.'
+    Assert-True ($lf -match '(?i)Proceed\? \(Y/N\)') 'Lock finder close is not gated behind a Y/N confirm.'
+    Assert-True (($lf + $lw) -notmatch 'RmShutdown') 'Lock finder calls RmShutdown - it must close one chosen PID only.'
+}
+
+# ===============================================================================
+# 42. Worker hygiene (Pass 1): both workers clear their PT_* hand-off variables
+#     after the child returns (same discipline as the DNS/Startup workers).
+# ===============================================================================
+Invoke-Test 'System-tools workers clear their PT_* hand-off variables' {
+    $cmd = Read-Lines $CmdPath
+    $pw = (Get-RoutineBody -Lines $cmd -Label 'PathWorker') -join "`n"
+    foreach ($v in 'PT_PE_MODE','PT_PE_ARG','PT_PE_LIST','PT_PE_RES') {
+        Assert-True ($pw -match ('(?i)set "' + $v + '="')) ("PathWorker does not clear " + $v + " after the child.")
+    }
+    $lw = (Get-RoutineBody -Lines $cmd -Label 'LockWorker') -join "`n"
+    foreach ($v in 'PT_LF_LIST','PT_LF_FILE') {
+        Assert-True ($lw -match ('(?i)set "' + $v + '="')) ("LockWorker does not clear " + $v + " after the child.")
+    }
+}
+
+# ===============================================================================
+# 43. Windows AI off by policy (Pass 2): :DoPrivacyCore writes the five-key
+#     core - Copilot off in BOTH scopes (HKCU + HKLM TurnOffWindowsCopilot=1),
+#     Recall blocked (AllowRecallEnablement=0, TurnOffSavingSnapshots=1,
+#     DisableAIDataAnalysis=1) and Click to Do off.
+# ===============================================================================
+Invoke-Test ':DoPrivacyCore turns off Windows AI (Copilot/Recall) by policy' {
+    $cmd = Read-Lines $CmdPath
+    $pc = (Get-RoutineBody -Lines $cmd -Label 'DoPrivacyCore') -join "`n"
+    Assert-True ($pc -match '(?i)"HKCU\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsCopilot" "TurnOffWindowsCopilot" REG_DWORD 1') 'Copilot user-policy (HKCU TurnOffWindowsCopilot=1) missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsCopilot" "TurnOffWindowsCopilot" REG_DWORD 1') 'Copilot machine-policy (HKLM TurnOffWindowsCopilot=1) missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"AllowRecallEnablement" REG_DWORD 0')  'Recall enablement is not blocked (AllowRecallEnablement=0 missing).'
+    Assert-True ($pc -match '(?i)"TurnOffSavingSnapshots" REG_DWORD 1') 'Recall snapshots are not turned off (TurnOffSavingSnapshots=1 missing).'
+    Assert-True ($pc -match '(?i)"DisableAIDataAnalysis" REG_DWORD 1')  'Recall data analysis is not turned off (DisableAIDataAnalysis=1 missing).'
+    Assert-True ($pc -match '(?i)"DisableClickToDo" REG_DWORD 1')       'Click to Do is not turned off (DisableClickToDo=1 missing).'
+}
+
+# ===============================================================================
+# 44. Input/speech personalization off (Pass 2): both AllowInputPersonalization
+#     scopes = 0, RestrictImplicitTextCollection = 1, HarvestContacts = 0, and
+#     online speech HasAccepted = 0.
+# ===============================================================================
+Invoke-Test ':DoPrivacyCore disables inking/typing/speech personalization' {
+    $cmd = Read-Lines $CmdPath
+    $pc = (Get-RoutineBody -Lines $cmd -Label 'DoPrivacyCore') -join "`n"
+    Assert-True ($pc -match '(?i)"HKCU\\SOFTWARE\\Policies\\Microsoft\\InputPersonalization" "AllowInputPersonalization" REG_DWORD 0') 'HKCU AllowInputPersonalization=0 missing.'
+    Assert-True ($pc -match '(?i)"HKLM\\SOFTWARE\\Policies\\Microsoft\\InputPersonalization" "AllowInputPersonalization" REG_DWORD 0') 'HKLM AllowInputPersonalization=0 missing.'
+    Assert-True ($pc -match '(?i)"RestrictImplicitTextCollection" REG_DWORD 1') 'RestrictImplicitTextCollection=1 missing.'
+    Assert-True ($pc -match '(?i)"HarvestContacts" REG_DWORD 0') 'HarvestContacts=0 missing.'
+    Assert-True ($pc -match '(?i)OnlineSpeechPrivacy" "HasAccepted" REG_DWORD 0') 'Online speech HasAccepted=0 missing.'
+}
+
+# ===============================================================================
+# 45. Telemetry-floor honesty (Pass 2): the Privacy screen must disclose that
+#     Home/Pro clamp AllowTelemetry=0 to Basic (1) and only Enterprise/Education
+#     honor 0 - the [OK]-honesty rule applied to copy, so the screen never
+#     implies zero telemetry on editions that cannot reach it.
+# ===============================================================================
+Invoke-Test 'Privacy screen discloses the Home/Pro telemetry floor' {
+    $cmd = Read-Lines $CmdPath
+    $pv = (Get-RoutineBody -Lines $cmd -Label 'Privacy') -join "`n"
+    Assert-True ($pv -match '(?i)Home/Pro') 'Privacy banner does not mention the Home/Pro editions.'
+    Assert-True ($pv -match '(?i)Basic \(1\)') 'Privacy banner does not state the Basic (1) floor.'
+    Assert-True ($pv -match '(?i)Enterprise') 'Privacy banner does not say which editions honor 0.'
+}
+
+# ===============================================================================
+# 46. DiagTrack side-effect honesty (Pass 2): the Privacy screen must disclose
+#     that stopping DiagTrack also stops Xbox achievement sync and Feedback Hub.
+# ===============================================================================
+Invoke-Test 'Privacy screen discloses the DiagTrack Xbox/Feedback Hub side effect' {
+    $cmd = Read-Lines $CmdPath
+    $pv = (Get-RoutineBody -Lines $cmd -Label 'Privacy') -join "`n"
+    Assert-True ($pv -match '(?i)Xbox achievement') 'Privacy banner does not disclose the Xbox achievements side effect.'
+    Assert-True ($pv -match '(?i)Feedback Hub') 'Privacy banner does not disclose the Feedback Hub side effect.'
+}
+
+# ===============================================================================
+# 47. SysMain knob (Pass 3): the Windows disk is probed, :DiskAdvisory is shown
+#     BEFORE the prompt, and that advisory stays warning-only - the same contract
+#     test 30 holds :LaptopAdvisory to, just gated on SYSDISK instead of MACHINE.
+#     SysMain genuinely helps a mechanical disk, so the hint must reach the user
+#     before they answer, and must never block or change a default.
+# ===============================================================================
+Invoke-Test 'SysMain knob: disk probed, advisory warning-only and pre-prompt' {
+    $cmd = Read-Lines $CmdPath
+
+    # Code only - the routine's comment names Get-PhysicalDisk/Get-Partition to explain
+    # why they are NOT the primary, so a body-wide match would assert against prose.
+    $probeBody = Get-RoutineBody -Lines $cmd -Label 'DetectSysDisk'
+    $probe = @($probeBody | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+
+    Assert-True ($probe -match '(?i)set "SYSDISK=unknown"') ':DetectSysDisk no longer defaults SYSDISK=unknown - a failed probe must not masquerade as a known disk.'
+    Assert-True ($probe -match '(?i)if defined SYSDISK goto :eof') ':DetectSysDisk lost its cache guard - it would relaunch PowerShell on every visit.'
+
+    # The primary must be the seek-penalty IOCTL. It asks the device directly and does not
+    # touch root\Microsoft\Windows\Storage - the namespace that threw CimException
+    # "Invalid property" on real hardware (HP Omen, NVMe SSD) for EVERY cmdlet in it,
+    # while this IOCTL answered correctly.
+    Assert-True ($probe -match '\[PTDisk\.N\]::DeviceIoControl\(') ':DetectSysDisk no longer INVOKES the seek-penalty IOCTL (the P/Invoke declaration alone proves nothing) - it would be back to depending on the Storage CIM namespace, which a single broken vendor provider takes down.'
+    Assert-True ($probe -match '\[PTDisk\.N\]::CreateFile\(')      ':DetectSysDisk no longer opens the volume handle the IOCTL needs.'
+    Assert-True ($probe -match '0x2D1400')          ':DetectSysDisk lost IOCTL_STORAGE_QUERY_PROPERTY (0x2D1400).'
+    Assert-True ($probe -match '\$q\.PropertyId=7') ':DetectSysDisk no longer queries StorageDeviceSeekPenaltyProperty (PropertyId 7) - the actual SSD-vs-spinning question.'
+
+    # Polarity matters more than anything else here: a seek penalty IS the spinning platter.
+    # Inverted, the advisory tells SSD owners to keep SysMain and HDD owners to drop it -
+    # confidently backwards advice, which is worse than the "unknown" it replaced.
+    Assert-True ($probe -match 'if\(\$d\.IncursSeekPenalty\)\{ \$t=''hdd'' \}else\{ \$t=''ssd'' \}') ':DetectSysDisk has the seek-penalty mapping backwards or reworded - a seek penalty means a spinning disk (hdd); no penalty means ssd.'
+
+    # Regression guard for the exact chain that failed in the field: Get-Partition piped
+    # into Get-Disk piped into Get-PhysicalDisk. The MediaType fallback may still name
+    # Get-PhysicalDisk on its own, so pin the *chain*, not the cmdlet.
+    Assert-True ($probe -notmatch '(?i)Get-Disk[^|]*\|\s*Get-PhysicalDisk') ':DetectSysDisk pipes Get-Disk into Get-PhysicalDisk again - that chain returned "unknown" on real hardware and there is no ByDisk parameter set for it.'
+
+    # ...and MediaType must stay a fallback: it may only run when the IOCTL said nothing.
+    Assert-True ($probe -match 'if\(\$t -eq ''unknown''\)') ':DetectSysDisk no longer gates the MediaType fallback on the IOCTL failing - the CIM path must never be the primary.'
+
+    $adv = Get-RoutineBody -Lines $cmd -Label 'DiskAdvisory'
+    $advText = $adv -join "`n"
+    Assert-True ($advText -match '(?i)if /i "%SYSDISK%"=="ssd" goto :eof') ':DiskAdvisory no longer returns early on a confirmed SSD - it would tell SSD users to keep SysMain enabled.'
+    Assert-True ($advText -match '(?i)"%SYSDISK%"=="hdd"') ':DiskAdvisory lost its HDD branch - the one case where the hint actually matters.'
+    Assert-True ($advText -match '\[ADVISORY\]') ':DiskAdvisory lost its [ADVISORY] output line.'
+    foreach ($ln in $adv) {
+        Assert-True ($ln -notmatch '(?i)set /p|call :SafeReg|call :Run|reg add|powercfg|bcdedit|schtasks') (':DiskAdvisory is no longer warning-only - it contains: ' + $ln.Trim())
+    }
+
+    # the knob itself, and the probe+advisory ordering ahead of its prompt
+    $perf = Get-RoutineBody -Lines $cmd -Label 'Performance'
+    $pi = -1; $ai = -1; $qi = -1
+    for ($i = 0; $i -lt $perf.Count; $i++) {
+        if ($pi -lt 0 -and $perf[$i] -match '(?i)call :DetectSysDisk') { $pi = $i }
+        if ($ai -lt 0 -and $perf[$i] -match '(?i)call :DiskAdvisory')  { $ai = $i }
+        if ($qi -lt 0 -and $perf[$i] -match '(?i)set /p "_q10=')       { $qi = $i }
+    }
+    Assert-True ($pi -ge 0) ':Performance never calls :DetectSysDisk - the SysMain advisory would have nothing to go on.'
+    Assert-True ($ai -ge 0) ':Performance never calls :DiskAdvisory before the SysMain knob.'
+    Assert-True ($qi -ge 0) ':Performance lost the SysMain prompt (_q10).'
+    Assert-True ($pi -lt $ai -and $ai -lt $qi) ':Performance probes/advises AFTER the SysMain prompt - the user would answer before seeing the warning.'
+
+    $perfText = $perf -join "`n"
+    Assert-True ($perfText -match '(?i)"HKLM\\SYSTEM\\CurrentControlSet\\Services\\SysMain" "Start" REG_DWORD 4') 'The SysMain knob no longer disables the service via the backed-up :SafeRegAdd path.'
+    Assert-True ($perfText -match '(?i)call :Run "sc stop SysMain"') 'The SysMain knob no longer stops the running service - it would look applied but change nothing until the next reboot.'
+}
+
+# ===============================================================================
+# 48. Pass-3 policy knobs: CPU power throttling (in :Power, which test 30 already
+#     proves shows the laptop advisory pre-prompt) and Delivery Optimization peer
+#     sharing (in :NetworkApply). Both go through :SafeRegAdd so each is backed up
+#     and reversible like every other registry change.
+# ===============================================================================
+Invoke-Test 'Power-throttling and Delivery-Optimization knobs write reversible policy' {
+    $cmd = Read-Lines $CmdPath
+
+    $pw = (Get-RoutineBody -Lines $cmd -Label 'Power') -join "`n"
+    Assert-True ($pw -match '(?i)call :SafeRegAdd "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Power\\PowerThrottling" "PowerThrottlingOff" REG_DWORD 1') ':Power lost the CPU power-throttling knob (or it stopped using :SafeRegAdd, losing the backup).'
+
+    $na = (Get-RoutineBody -Lines $cmd -Label 'NetworkApply') -join "`n"
+    Assert-True ($na -match '(?i)call :SafeRegAdd "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization" "DODownloadMode" REG_DWORD 0') ':NetworkApply lost the Delivery Optimization knob (or it stopped using :SafeRegAdd, losing the backup).'
+}
+
+# ===============================================================================
+# 49. Extra telemetry tasks (Pass 3) are disabled BY NAME. schtasks /Change needs a
+#     task's full folder path; an unverified path fails quietly and the run still
+#     looks clean while the task stays enabled. Get-ScheduledTask finds the task
+#     wherever it lives, and the routine must report found/disabled honestly rather
+#     than printing a blind [OK]. Safety: only the DiskDiagnostic DataCollector (it
+#     uploads drive SMART data) may be listed - never the Resolver, which is what
+#     warns you about a dying disk.
+# ===============================================================================
+Invoke-Test 'Extra telemetry tasks disabled by name; disk Resolver never touched' {
+    $cmd = Read-Lines $CmdPath
+    $b = Get-RoutineBody -Lines $cmd -Label 'DisableTelemetryTasks'
+    $t = $b -join "`n"
+    # Match CODE, never prose: this routine's comment names Get-ScheduledTask and schtasks
+    # to explain the choice, so a body-wide -match would pass even with the code gutted.
+    $code = @($b | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+
+    Assert-True ($code -match 'Get-ScheduledTask')     ':DisableTelemetryTasks no longer looks tasks up by name.'
+    Assert-True ($code -match 'Disable-ScheduledTask') ':DisableTelemetryTasks no longer disables anything.'
+    Assert-True ($code -notmatch '(?i)schtasks')       ':DisableTelemetryTasks INVOKES schtasks - an unverified task path fails silently, which is why this routine looks tasks up by name.'
+
+    Assert-True ($code -match 'Microsoft-Windows-DiskDiagnosticDataCollector') 'The disk SMART-telemetry collector is no longer in the task list.'
+    Assert-True ($code -notmatch '(?i)DiskDiagnosticResolver') 'The DiskDiagnostic RESOLVER is in the disable list - that is the task that warns about a failing disk and must never be disabled.'
+
+    # honest reporting: absent / found-but-failed / success are three distinct outcomes,
+    # and the two guard branches must precede the [OK].
+    $si = -1; $fi = -1; $oi = -1
+    for ($i = 0; $i -lt $b.Count; $i++) {
+        if ($si -lt 0 -and $b[$i] -match '\[SKIP\]') { $si = $i }
+        if ($fi -lt 0 -and $b[$i] -match '\[FAIL\]') { $fi = $i }
+        if ($oi -lt 0 -and $b[$i] -match '\[OK\]')   { $oi = $i }
+    }
+    Assert-True ($si -ge 0) ':DisableTelemetryTasks lost its [SKIP] branch - a task absent on this edition would be reported as a success.'
+    Assert-True ($fi -ge 0) ':DisableTelemetryTasks lost its [FAIL] branch - found-but-not-disabled would be reported as a success.'
+    Assert-True ($oi -ge 0) ':DisableTelemetryTasks never reports success.'
+    Assert-True ($si -lt $oi -and $fi -lt $oi) ':DisableTelemetryTasks prints [OK] before its guard branches - that is an unconditional [OK].'
+}
+
+# ===============================================================================
+# 50. DiagTrack firewall block (Pass 3) flips Windows' OWN built-in DiagTrack rule
+#     group from Allow to Block - the same thing Sophia does. It must not invent a
+#     netsh rule (nothing to name, nothing to clean up), and it must count what it
+#     actually changed instead of assuming.
+# ===============================================================================
+Invoke-Test 'DiagTrack firewall flips the built-in rule group, honestly counted' {
+    $cmd = Read-Lines $CmdPath
+    $b = Get-RoutineBody -Lines $cmd -Label 'DiagTrackFirewall'
+    # Code only - the undo comment names Set-NetFirewallRule, and prose must never
+    # be able to satisfy an assertion about behaviour.
+    $code = @($b | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+
+    Assert-True ($code -match 'Get-NetFirewallRule -Group DiagTrack') ':DiagTrackFirewall no longer targets the built-in DiagTrack rule group.'
+    Assert-True ($code -match 'Set-NetFirewallRule')                  ':DiagTrackFirewall no longer changes the rules.'
+    Assert-True ($code -match '(?i)-Action Block')                    ':DiagTrackFirewall no longer blocks (Action Block is gone).'
+    Assert-True ($code -notmatch '(?i)netsh advfirewall')             ':DiagTrackFirewall invents a netsh rule - it must flip the rules Windows already ships.'
+
+    $si = -1; $fi = -1; $oi = -1
+    for ($i = 0; $i -lt $b.Count; $i++) {
+        if ($si -lt 0 -and $b[$i] -match '\[SKIP\]') { $si = $i }
+        if ($fi -lt 0 -and $b[$i] -match '\[FAIL\]') { $fi = $i }
+        if ($oi -lt 0 -and $b[$i] -match '\[OK\]')   { $oi = $i }
+    }
+    Assert-True ($si -ge 0 -and $fi -ge 0 -and $oi -ge 0) ':DiagTrackFirewall lost one of its three outcomes (no rules / none changed / blocked N).'
+    Assert-True ($si -lt $oi -and $fi -lt $oi) ':DiagTrackFirewall prints [OK] before its guard branches - that is an unconditional [OK].'
+
+    # the opt-in lives on the Privacy screen
+    $pv = (Get-RoutineBody -Lines $cmd -Label 'Privacy') -join "`n"
+    Assert-True ($pv -match '(?i)call :DiagTrackFirewall') 'The Privacy screen no longer offers the firewall block.'
+}
+
+# ===============================================================================
+# 51. The Pass-3 declines stay declined. Each was checked against Microsoft's own
+#     documentation and rejected: SvcHostSplitThresholdInKB (MS splits svchost on
+#     purpose for inter-service isolation and reliability; regrouping buys a modest
+#     RAM saving), ServicesPipeTimeout=30000 (30 s already IS the SCM default, so it
+#     is a no-op, and it would undo a real 60000 fix), EnablePrefetcher=0 (same cost
+#     as clearing the Prefetch folder, which this script already declines, made
+#     permanent). This test guards BOTH halves of "be honest": the reasons stay
+#     visible on the Excluded screen, and no code path ever writes the values.
+# ===============================================================================
+Invoke-Test 'Declined tweaks stay declined and stay documented' {
+    $cmd = Read-Lines $CmdPath
+    $excluded = (Get-RoutineBody -Lines $cmd -Label 'Excluded') -join "`n"
+
+    foreach ($d in 'SvcHostSplitThresholdInKB','ServicesPipeTimeout','EnablePrefetcher') {
+        Assert-True ($excluded -match [regex]::Escape($d)) ("The Excluded screen no longer explains why $d is left out - the decline became invisible to the user.")
+        foreach ($ln in $cmd) {
+            $s = $ln.Trim()
+            if ($s -match '^(?i)(echo|rem)\b') { continue }   # explaining it is the point; writing it is not
+            Assert-True ($s -notmatch [regex]::Escape($d)) ("$d is declined on the Excluded screen but written by: " + $s)
+        }
+    }
+}
+
+# ===============================================================================
+# 52. Cleanup deletes can never fire on a collapsed path. Batch does not error on
+#     an unset variable - it expands to nothing - so "del /f /s /q "%TEMP%\*.*""
+#     silently becomes "del /f /s /q "\*.*"": a RECURSIVE delete from the root of
+#     the current drive. Quoting does not help; the quotes are intact, the content
+#     collapsed. Every root must therefore be proven up front and every delete
+#     gated on its root. Six entry points inherit this (menu 1, Apply recommended,
+#     all three built-in presets, and custom presets), so it is worth pinning hard.
+# ===============================================================================
+Invoke-Test 'Cleanup deletes are gated on a proven root' {
+    $cmd  = Read-Lines $CmdPath
+    $body = Get-RoutineBody -Lines $cmd -Label 'DoCleanupCore'
+    $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' })
+    $text = $code -join "`n"
+
+    foreach ($r in 'TEMP','SystemRoot','LocalAppData') {
+        Assert-True ($text -match ('(?i)call :CleanRoot ' + $r + ' "%' + $r + '%"')) ":DoCleanupCore no longer proves $r before deleting under it."
+    }
+
+    # Every delete that interpolates a variable must be gated. A single ungated one
+    # is the whole bug back again.
+    foreach ($ln in $code) {
+        if ($ln -match '(?i)call :Run "del ') {
+            Assert-True ($ln -match '(?i)^\s*if defined _clean(TEMP|SystemRoot|LocalAppData)\s') ("Ungated delete in :DoCleanupCore - if its root variable is unset this deletes from a drive root: " + $ln.Trim())
+        }
+    }
+}
+
+# ===============================================================================
+# 53. :CleanRoot only approves a root that cannot collapse: set, a real directory,
+#     and not a drive root (%TEMP%=C:\ would turn the first delete into
+#     "del /f /s /q "C:\*.*"" with /s still attached). The approval flag must be
+#     set only after ALL three guards, and a refusal must be spoken, not silent.
+# ===============================================================================
+Invoke-Test ':CleanRoot refuses unset, non-directory and drive-root values' {
+    $cmd = Read-Lines $CmdPath
+    $b   = Get-RoutineBody -Lines $cmd -Label 'CleanRoot'
+    $code = @($b | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' })
+    $text = $code -join "`n"
+
+    Assert-True ($text -match '(?i)if not defined _crv')    ':CleanRoot no longer rejects an unset root - the collapse case this exists for.'
+    Assert-True ($text -match 'if not exist "!_crv!\\"') ':CleanRoot no longer requires the root to be a real directory.'
+    Assert-True ($text -match '(?i)if "!_crv:~3!"==""')     ':CleanRoot no longer rejects a drive root.'
+    Assert-True ($text -match '(?i)set "_clean%~1=1"')      ':CleanRoot never approves anything - cleanup would silently do nothing.'
+
+    # the approval must come last: after every guard, never before one
+    $approve = -1; $guards = @()
+    for ($i = 0; $i -lt $code.Count; $i++) {
+        if ($approve -lt 0 -and $code[$i] -match '(?i)set "_clean%~1=1"') { $approve = $i }
+        if ($code[$i] -match '(?i)if not defined _crv|if not exist "!_crv!|if "!_crv:~3!"==""') { $guards += $i }
+    }
+    Assert-True ($approve -ge 0)          ':CleanRoot lost its approval line.'
+    Assert-True ($guards.Count -ge 3)     ':CleanRoot is missing one of its three guards (unset / not-a-directory / drive-root).'
+    foreach ($g in $guards) {
+        Assert-True ($g -lt $approve) ':CleanRoot approves the root before finishing its guards - a bad root would be approved anyway.'
+    }
+
+    # a refusal has to be visible, or cleanup silently does nothing and still says [OK]
+    Assert-True ((($b | Where-Object { $_ -match '\[SKIP\]' }).Count) -ge 3) ':CleanRoot stopped reporting why it refused a root - the skip would be silent.'
+}
+
+# ===============================================================================
+# 54. Nothing multi-step may depend on a bundled file. :RequireBundledFile aborts
+#     with "goto MenuApps", which is correct ONLY because every caller today is a
+#     single Apps-menu action that has not changed anything yet (:UnityBoot,
+#     :ApplyHosts, :TimerResApply). Called from a *Core routine, a preset, or
+#     Apply recommended, that same goto would abandon the run mid-way, skip
+#     :Summary, and drop the user on an unrelated menu with the machine half
+#     configured - a silent partial apply, which is the one thing this script
+#     refuses to do. If a bundled-file dependency ever needs to move into a
+#     multi-step path, :RequireBundledFile must return a status first.
+# ===============================================================================
+Invoke-Test 'Multi-step runs never depend on a bundled file' {
+    $cmd = Read-Lines $CmdPath
+
+    $multi = @($cmd | Where-Object { $_ -match '^:(Do\w+Core|Preset\w+|ApplyRecommended)\s*$' } |
+                      ForEach-Object { $_.Trim().TrimStart(':') })
+    Assert-True ($multi.Count -ge 5) 'Could not find the multi-step routines - this test would pass vacuously.'
+
+    foreach ($r in $multi) {
+        $rBody = Get-RoutineBody -Lines $cmd -Label $r
+        $b = @($rBody | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+        Assert-True ($b.Length -gt 0) ("Could not read the body of :$r - this check would pass vacuously.")
+        Assert-True ($b -notmatch '(?i)call :RequireBundledFile') (":$r calls :RequireBundledFile, which aborts with 'goto MenuApps'. That would abandon a multi-step run part-way, skip :Summary and land the user on an unrelated menu with the machine half configured. Make :RequireBundledFile return a status before depending on it here.")
+    }
+
+    # and the guard must still actually abort rather than fall through
+    $rbBody = Get-RoutineBody -Lines $cmd -Label 'RequireBundledFile'
+    $rb = @($rbBody | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($rb -match '(?i)goto MenuApps') ':RequireBundledFile no longer aborts on a missing file - the caller would run on without it.'
+}
+
 # ---- summary ------------------------------------------------------------------
 Write-Host ""
 if ($script:Failures.Count -eq 0) {
