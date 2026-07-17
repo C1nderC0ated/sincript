@@ -17,8 +17,15 @@ as `Machine=` on the main menu and in the log). Actions that are typically
 counterproductive on the detected machine class — the always-on power plan,
 hibernation off, BCD dynamic-tick off, and the timer-resolution autostart on
 laptops; `LargeSystemCache` on desktops — print an **`[ADVISORY]`** line before
-their confirmation prompt. Advisories are informational only: they never block
-an action, never change a default, and never alter what a preset applies.
+their confirmation prompt. The **SysMain** toggle works the same way against a
+different probe: it checks what the Windows disk actually is (SSD vs mechanical)
+and warns first, because SysMain genuinely helps a spinning disk. That check asks
+the drive directly — *does it incur a seek penalty*, which is literally the
+SSD-vs-spinning question and what Windows itself uses — rather than going through
+the Storage WMI cmdlets, which fail on more machines than you'd expect (one faulty
+vendor storage provider takes the whole namespace down with it, and OEM laptops
+ship those as standard). Advisories are informational only: they never block an
+action, never change a default, and never alter what a preset applies.
 
 The **runtime** is a single self-contained `PerfTweaks.cmd` (no installer, no
 dependencies). The release also ships optional bundled inputs, a
@@ -65,8 +72,8 @@ harness — see [Release contents](#release-contents).
 | # | Item | What it covers |
 |---|------|----------------|
 | 1 | Cleanup & repair | Temp/log cleanup, SFC/DISM, Windows Update reset, Store repair, WinSxS compaction |
-| 2 | Performance tweaks | GameDVR off, game-task priorities, snappier UI timings, optional Game Mode / mouse-acceleration / file-extensions toggles |
-| 3 | Privacy & telemetry | Telemetry, ad ID, Cortana/web search, location, activity history, feedback off |
+| 2 | Performance tweaks | GameDVR off, game-task priorities, snappier UI timings, optional Game Mode / mouse-acceleration / file-extensions / Storage Sense / Search-scope / SysMain toggles |
+| 3 | Privacy & telemetry | Telemetry, ad ID, Cortana/web search, location, activity history, feedback off; **Windows AI** (Copilot, Recall, Click to Do) and inking/typing/speech personalization off; optional firewall block for the telemetry service |
 | 4 | Power plan | High-performance / Ultimate plan, disable sleep & disk timeouts, optional 5% min processor state |
 | 5 | Network & DNS | TCP tuning, DNS provider switch, full network stack reset |
 | 6 | Apps & files | OpenAsar for Discord, Unity `boot.config`, custom `hosts` file, lightweight Steam launcher, Windows timer resolution, startup-apps manager |
@@ -75,14 +82,26 @@ harness — see [Release contents](#release-contents).
 | 9 | Apply recommended safe set | One-click core tweaks from categories 1–5 (no prompts) |
 | 10 | Presets | Auto-apply **light / moderate / heavy** preset, build your own **custom** preset, or restore a preset's JSON backup |
 | 11 | What was excluded | Explains what the script deliberately leaves out, and why |
+| 12 | System tools | General-purpose tools, not tweaks: **PATH editor** and **find what is locking a file** |
 | 0 | Exit | |
 
 ### Sub-menus
 - **Cleanup & repair** — Disk cleanup (with an optional, irreversible clear of **all Event Viewer logs**) · SFC + DISM repair (their native progress output now streams live to the console) · Windows Update reset · re-register Microsoft Store · compact WinSxS.
-- **Network & DNS** — Apply TCP tweaks (autotuning, RSS/RSC; optional **Nagle / delayed-ACK off** for lower latency) · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
+
+  Every delete in the cleanup is anchored on an environment variable (`%TEMP%`,
+  `%SystemRoot%`, `%LocalAppData%`), and each of those is **checked before anything
+  is deleted**: it has to be set, point at a folder that exists, and not be a drive
+  root. Anything that doesn't check out is skipped, out loud. That guard is there
+  because batch doesn't complain about an unset variable — it expands to nothing —
+  so on a machine with a broken environment `del /f /s /q "%TEMP%\*.*"` would
+  quietly become `del /f /s /q "\*.*"`: a recursive delete from the root of the
+  drive. Quoting the paths doesn't help; the quotes are intact, it's the contents
+  that collapsed.
+- **Network & DNS** — Apply TCP tweaks (autotuning, RSS/RSC; optional **Nagle / delayed-ACK off** for lower latency, and optional **Delivery Optimization off** so Windows Update stops uploading files to other PCs) · DNS menu (Cloudflare, Google, Quad9, or back to automatic/DHCP) · reset network stack.
 - **Apps & files** — Install OpenAsar · apply a Unity `boot.config` · apply a custom `hosts` blocklist · restore the original `hosts` · install **SteamLight** (a lightweight Steam launcher + Desktop shortcut) · apply/remove a higher **timer resolution** (SetTimerResolution autostart) · remove built-in Store apps (**debloat**) · **manage startup programs** (flip Run-key and Startup-folder entries between Enabled and Disabled via the same reversible `StartupApproved` switch Task Manager uses; the prior state is saved to a `.reg` backup before every flip).
 - **Advanced** — Disable/enable CPU mitigations · set/revert boot (BCD) timers · NVMe feature flags · disable IPv6 · disable memory compression · disable GPU telemetry (NVIDIA telemetry tasks + registry, or the AMD User Experience Program opt-out) · GPU hardware scheduling (HAGS) on/off · set a permanent per-program CPU priority (per `.exe`, via Image File Execution Options).
 - **Presets** — Apply a built-in **light**, **moderate**, or **heavy** preset (no per-item prompts) · apply a **custom** preset from a `.preset` file · **restore** the registry values a preset changed from one of its JSON backups.
+- **System tools** — **Edit PATH** (System or User) with dead-entry and duplicate cleanup · **Find what is locking a file** and optionally close the holder. Both are described under [System tools](#system-tools).
 - **Backups & status** — Create a System Restore Point · export HKLM + HKCU · restore from a preset JSON backup · restore a single value backup (`.reg`) · manage/open the backup folder · show the current state of key tweaks, the active power plan, hibernation, minimum processor state, DNS, TCP autotuning, GPU hardware scheduling (HAGS), memory compression, the `hosts` line count, and whether OpenAsar is installed.
 
 ---
@@ -179,6 +198,56 @@ you can restore from the Backups menu.
 
 ---
 
+## System tools
+
+**`12. System tools`** holds general-purpose tools rather than tweaks. They
+change nothing on their own — you read first, then decide.
+
+### Edit PATH
+
+Edits the **System** (`HKLM`, all users, needs Administrator) or **User**
+(`HKCU`, just you) `PATH`.
+
+- Lists `PATH` as numbered entries and flags any folder that no longer exists as
+  **`[missing]`** — the dead entries worth clearing out.
+- Add a folder, remove one by number, drop **all** dead entries, or clean
+  duplicates.
+- **It never uses `setx`.** `setx` is documented to crop a value at 1024
+  characters — a real machine `PATH` is routinely longer, so it would silently
+  destroy most of it — and to rewrite `REG_EXPAND_SZ` as `REG_SZ`, freezing
+  `%SystemRoot%`-style references into literal paths. Sincript reads the **raw**
+  value and writes it back as `REG_EXPAND_SZ`, so both the length and the `%VAR%`
+  references survive.
+- The whole `Environment` key is backed up to a `.reg` (via `reg export`, which is
+  exact for `REG_EXPAND_SZ`) **before** any edit — and if that backup can't be
+  written, **the edit doesn't happen**. A `PATH` you can't put back isn't worth the
+  risk.
+- After a change it broadcasts `WM_SETTINGCHANGE`, so new programs and shells see
+  the new `PATH` without a sign-out. Programs **already open keep the old value**
+  until they restart — expected, and the tool says so.
+
+Editing the System `PATH` needs an elevated window. If you aren't elevated,
+sincript says so up front and offers the User `PATH` instead, rather than letting
+the save fail.
+
+### Find what is locking a file
+
+Answers *"what has this file open?"* when Windows won't let you delete or replace
+something, using the Windows **Restart Manager** — the same API installers use.
+
+- Give it a full file path; it lists every process holding the file (PID + name).
+- Core Windows processes are marked **`[critical]`** using Windows' own
+  classification, and sincript **will not close them** — a reboot is the only
+  safe way to release a file they hold.
+- Closing a holder is optional, one process at a time, and confirmed. It loses
+  that program's unsaved work but does not delete the file; sincript then
+  re-checks and tells you whether the file is actually free.
+- No reboot and no extra downloads: `openfiles` needs a global flag *and* a
+  reboot before it reports anything, and Sysinternals `handle.exe` would be an
+  external dependency — so neither is used.
+
+---
+
 ## Safety & backups
 
 The script is built around being undoable.
@@ -209,6 +278,12 @@ All backups and logs live in **`Documents\PerfTweaks_Backups`** inside your user
 | Removed built-in apps (debloat) | Reinstall from the Microsoft Store |
 | Startup entry enabled/disabled | Flip it again under Apps & files → **Manage startup programs**, merge its `.reg` backup, or use Task Manager → Startup apps |
 | Memory compression | PowerShell: `Enable-MMAgent -MemoryCompression` |
+| A `PATH` edit | Double-click the `PATH` `.reg` backup written before the edit (in `Documents\PerfTweaks_Backups`) |
+| SysMain / Superfetch | Merge its `.reg` backup, or `sc config SysMain start= auto` |
+| Storage Sense / Delivery Optimization / CPU power throttling | Merge each one's `.reg` backup (they are policy values; the backup restores "not configured") |
+| Windows AI (Copilot / Recall) | Merge their `.reg` backups, or restore the preset JSON backup |
+| Telemetry firewall block | Elevated PowerShell: `Set-NetFirewallRule -Group DiagTrack -Action Allow` |
+| Telemetry scheduled tasks | Task Scheduler → find the task → **Enable**, or PowerShell: `Get-ScheduledTask -TaskName <name> \| Enable-ScheduledTask` |
 | Registry values changed by a preset | Backups & status → **Restore from a preset backup (JSON)** (or run the relevant menu item to reverse it) |
 | Everything at once | Roll back to the **System Restore Point**, or import the **full registry backup** |
 
@@ -240,6 +315,11 @@ line.
 Newest first. Feature details live in the sections above — this is just what
 changed.
 
+- **System tools (menu 12).** New **PATH editor** — System or User, lists entries, flags dead ones, add / remove-by-number / drop-dead / de-duplicate — and **find what is locking a file** (Restart Manager: lists every holder, marks critical Windows processes and refuses to close them, optional confirmed per-process close). The PATH editor never uses `setx` (it crops at 1024 characters and freezes `%SystemRoot%` into literal paths), backs up the whole value first, and broadcasts the change so new programs see it without a sign-out. Guarded by tests 31–42.
+- **Privacy: Windows AI off by policy.** Copilot (user *and* machine policy), **Recall** (enablement blocked, snapshot saving off, data analysis off), **Click to Do**, plus inking/typing personalization and online speech recognition. It rides along everywhere privacy is applied — menu 3, *Apply recommended*, and every preset — through the same backed-up, reversible path. The Privacy screen now also states two things it previously implied away: `AllowTelemetry=0` is only honored on Enterprise/Education (**Home and Pro clamp it to Basic, 1**), and stopping DiagTrack also stops **Xbox achievement sync and the Feedback Hub**. Guarded by tests 43–46.
+- **More optional knobs.** *Performance:* Storage Sense off · Windows Search classic scope · **SysMain/Superfetch off**, which first probes the Windows disk and warns before the prompt if it looks like a mechanical HDD. *Power:* CPU power throttling off. *Network:* Delivery Optimization off. *Privacy:* four more telemetry scheduled tasks — looked up **by name** and reported as *found vs disabled* instead of a blind "done" — plus an optional **firewall block** for the telemetry service that flips Windows' own DiagTrack rules. Guarded by tests 47–50.
+- **Three popular tweaks verified against Microsoft's documentation and declined** — regrouping svchost (`SvcHostSplitThresholdInKB`), lowering `ServicesPipeTimeout`, and disabling the prefetcher. They are listed with their reasons on *What was excluded*, and test 51 fails if any of them is ever quietly added back.
+- **Static test harness expanded to 54 checks** — every new detector verified against a deliberately broken copy.
 - **Elevation works when the script path contains an apostrophe** (e.g. `C:\Users\O'Brien\`) — the UAC relaunch now passes `%~f0` via `$env:PT_SELF` instead of embedding it in `Start-Process -FilePath '…'`, where a `'` broke the string and killed the relaunch with no prompt.
 - **Per-value backups decline non-ASCII string data instead of corrupting it.** Undo files are written with `echo` (console code page), so non-ASCII `REG_SZ` *prior data* came back as mojibake; such values are now marked *not auto-restorable — use the full backup* (like `REG_BINARY`) and skipped on preset restore. The full `reg export` still restores them correctly.
 - **Idempotent registry writes.** Applying a value already at the target prints `[SKIP] … already set` and returns **before** writing a backup, so a re-run or re-applied preset can't bury the true-original undo.
@@ -307,13 +387,31 @@ RAM / standby "cleaners", and forcing MSI mode or NIC parameter edits (which the
 experienced guides themselves advise against). Read it to understand the safety
 rationale.
 
+Three tweaks other optimizers ship were checked against Microsoft's own
+documentation and left out on the evidence:
+
+- **Regrouping svchost services** (`SvcHostSplitThresholdInKB`). Windows splits
+  services into separate processes above 3.5 GB of RAM *on purpose*: Microsoft
+  documents the benefits as reliability, **inter-service isolation**, per-service
+  resource management and clearer diagnostics — and describes the footprint saving
+  from regrouping as *modest*. Isolation is worth more than the RAM, so this sits
+  under security-weakening alongside VBS/HVCI.
+- **Lowering `ServicesPipeTimeout` to 30000.** 30 seconds already *is* the
+  Service Control Manager's default, so the write changes nothing — and `60000` is
+  the well-known **fix** people apply when a service legitimately needs longer to
+  start, so applying this would silently undo it.
+- **Disabling the prefetcher** (`EnablePrefetcher=0`). The same cost as clearing
+  the Prefetch folder — which this script already declines, because the next
+  launches just get slower — only permanent, and for close to nothing on an SSD.
+  SysMain on/off is offered separately, under Performance.
+
 ---
 
 ## Tests
 
 Sincript ships with a **static-analysis** harness in `tests/`. `PerfTweaks.cmd`
 is interactive and changes the system, so it can't be safely unit-tested by
-*running* it; instead `tests/Run-Tests.ps1` (30 checks on stock Windows
+*running* it; instead `tests/Run-Tests.ps1` (54 checks on stock Windows
 PowerShell 5.1 — no Pester) parses the script text for invariants that tend to
 break silently, including:
 
@@ -322,6 +420,11 @@ break silently, including:
 - no duplicate `boot.config` keys; `example.preset` keys match the in-script validator
 - honest reporting (`:Summary`, `_FAILS`, elevation gating, DNS/OpenAsar/backup guards) does not regress
 - backup undo integrity (quote escaping, collision-resistant filenames, hosts backup-before-overwrite)
+- the PATH editor never invokes `setx`, keeps `REG_EXPAND_SZ`, and backs up before writing
+- the lock finder refuses to close processes Windows marks critical
+- advisories (laptop, desktop, disk) stay warning-only and appear **before** their prompt
+- the tweaks listed on *What was excluded* are never quietly written back
+- every cleanup delete is gated on a proven root, so an unset variable can never collapse `"%TEMP%\*.*"` into `"\*.*"`
 
 Run from the repository root:
 
@@ -329,7 +432,7 @@ Run from the repository root:
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 ```
 
-Exit code `0` means all 30 checks passed; `1` means at least one failed, with
+Exit code `0` means all 54 checks passed; `1` means at least one failed, with
 the offending detail printed. See `tests/README.md` for the full numbered list.
 
 ---
