@@ -461,16 +461,33 @@ set /p "_q1=  SystemResponsiveness=0 (reserve less for background)? (Y/N): "
 if /i "%_q1%"=="Y" call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" REG_DWORD 0 "SystemResponsiveness 0"
 set /p "_q2=  Disable network throttling (may affect media playback)? (Y/N): "
 if /i "%_q2%"=="Y" call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex" REG_DWORD 4294967295 "Network throttling off"
-rem  One mutually-exclusive choice (not two yes/no prompts): picking 42 and then "reset to 2"
+rem  One mutually-exclusive choice (not two yes/no prompts): picking a value and then "reset"
 rem  in the same pass was a net no-op, and the reset's per-value .reg backup would snapshot 42
 rem  (the value just set) instead of the true prior default, breaking that single-value undo.
-echo   Win32PrioritySeparation:
-echo       1 = 42 (0x2A: short/fixed quantum, strong foreground boost)
-echo       2 = 2  (Windows default - pick this to undo a previous 42)
+rem  A word on what these values actually do, because the Windows "Processor scheduling"
+rem  dialog reads them back and it is easy to be surprised. The value is a bitfield;
+rem  bits 3-2 are the quantum TYPE: 1 = variable, 2 = fixed. Per Microsoft, variable is
+rem  the client default and gives the FOREGROUND app a longer quantum; fixed is the
+rem  Windows Server default and gives every app the same quantum. So:
+rem    42 (0x2A) = short, FIXED quantum. Because the quantum is fixed, the dialog shows
+rem               "background services" - not a bug, that is what fixed means. It is the
+rem               classic "42" tweak; it favours throughput/consistency over fg latency.
+rem    38 (0x26) = short, VARIABLE quantum, strong fg boost. This is the exact value the
+rem               dialog writes for "Programs"; the foreground app gets the longer slice.
+rem  Both are legitimate; they are opposite trade-offs, so both are offered rather than
+rem  one being declared "correct".
+echo   Win32PrioritySeparation ^(processor scheduling^):
+echo       1 = 42 ^(0x2A: short FIXED quantum - the classic "42" tweak. The Windows
+echo               dialog will read this back as "background services", because a fixed
+echo               quantum treats all apps equally - that is what the value means.^)
+echo       2 = 38 ^(0x26: short VARIABLE quantum, strong foreground boost - the value
+echo               Windows own "Programs" radio writes; foreground gets the longer slice.^)
+echo       3 = 2  ^(Windows default - pick this to undo a previous 42 or 38^)
 echo       N = leave unchanged
-set /p "_q3=  Choose [1/2/N]: "
-if "%_q3%"=="1" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 42 (0x2A)"
-if "%_q3%"=="2" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 2 "Win32PrioritySeparation default (2)"
+set /p "_q3=  Choose [1/2/3/N]: "
+if "%_q3%"=="1" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 42 (0x2A, short fixed quantum)"
+if "%_q3%"=="2" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 38 "Win32PrioritySeparation = 38 (0x26, short variable quantum, foreground)"
+if "%_q3%"=="3" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 2 "Win32PrioritySeparation default (2)"
 call :DesktopAdvisory
 set /p "_q4=  LargeSystemCache=1 (can help some laptops, can hurt desktops)? (Y/N): "
 if /i "%_q4%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "LargeSystemCache" REG_DWORD 1 "LargeSystemCache on"
@@ -2785,7 +2802,13 @@ call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\S
 goto :eof
 
 :DoWin32_42
-call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 42 (0x2A)"
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 42 "Win32PrioritySeparation = 42 (0x2A, short fixed quantum)"
+goto :eof
+
+:DoWin32_38
+rem  0x26 = short, VARIABLE quantum, strong foreground boost - the value Windows writes
+rem  for the "Programs" radio. Foreground app gets the longer quantum.
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation" REG_DWORD 38 "Win32PrioritySeparation = 38 (0x26, short variable quantum, foreground)"
 goto :eof
 
 :DoWin32_26
@@ -3090,6 +3113,7 @@ if defined _P_NETTHROTTLE call :DoNetThrottleOff
 if defined _P_LARGECACHE  call :DoLargeCacheOn
 if defined _P_GAMEMODE    call :DoGameModeOff
 if "%_P_WIN32%"=="42"     call :DoWin32_42
+if "%_P_WIN32%"=="38"     call :DoWin32_38
 if "%_P_WIN32%"=="26"     call :DoWin32_26
 if "%_P_WIN32%"=="2"      call :DoWin32_2
 if defined _P_MINPROC     call :SetMinProcState
@@ -3155,9 +3179,10 @@ goto :eof
 
 :PChkWin32
 if "%~1"=="42" ( set "_P_WIN32=42" & set /a _pgood+=1 & goto :eof )
+if "%~1"=="38" ( set "_P_WIN32=38" & set /a _pgood+=1 & goto :eof )
 if "%~1"=="26" ( set "_P_WIN32=26" & set /a _pgood+=1 & goto :eof )
 if "%~1"=="2"  ( set "_P_WIN32=2"  & set /a _pgood+=1 & goto :eof )
->>"%_perrfile%" echo   bad value "%~1" for key win32priority (use 42, 26 or 2)
+>>"%_perrfile%" echo   bad value "%~1" for key win32priority (use 42, 38, 26 or 2)
 set /a _perr+=1
 goto :eof
 
