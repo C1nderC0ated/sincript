@@ -179,7 +179,7 @@ it.
 | `nvme_flags` | `1` | NVMe feature flags *(may be blocked on fully-patched Windows)* |
 | `gpu_telemetry_off` | `1` | Disable GPU telemetry (NVIDIA tasks + opt-out; opt-out on AMD) |
 | `nagle_off` | `1` | Disable Nagle on all interfaces (`TcpAckFrequency` / `TCPNoDelay`) |
-| `win32priority` | `42`, `26` or `2` | `Win32PrioritySeparation` — `42` = short fixed quantum (strong foreground), `26` = short variable quantum (strong foreground), `2` = Windows default |
+| `win32priority` | `42`, `38`, `26` or `2` | `Win32PrioritySeparation`. **`42`** (0x2A) = short **fixed** quantum — the classic "42" tweak; because the quantum is fixed, Windows' Processor-Scheduling dialog reads it back as *background services* (that's what fixed means, not a bug). **`38`** (0x26) = short **variable** quantum, strong foreground boost — the exact value Windows' own *Programs* radio writes; the foreground app gets the longer slice. **`26`** (0x1A) = long fixed quantum. **`2`** = Windows default. `42` and `38` are opposite trade-offs (throughput vs foreground latency); pick to taste. |
 | `dns` | `cloudflare`, `google`, or `quad9` | Set DNS on all active adapters |
 
 Keys not listed here (and `1`-keys given any other value) are **rejected**.
@@ -319,7 +319,7 @@ changed.
 - **Privacy: Windows AI off by policy.** Copilot (user *and* machine policy), **Recall** (enablement blocked, snapshot saving off, data analysis off), **Click to Do**, plus inking/typing personalization and online speech recognition. It rides along everywhere privacy is applied — menu 3, *Apply recommended*, and every preset — through the same backed-up, reversible path. The Privacy screen now also states two things it previously implied away: `AllowTelemetry=0` is only honored on Enterprise/Education (**Home and Pro clamp it to Basic, 1**), and stopping DiagTrack also stops **Xbox achievement sync and the Feedback Hub**. Guarded by tests 43–46.
 - **More optional knobs.** *Performance:* Storage Sense off · Windows Search classic scope · **SysMain/Superfetch off**, which first probes the Windows disk and warns before the prompt if it looks like a mechanical HDD. *Power:* CPU power throttling off. *Network:* Delivery Optimization off. *Privacy:* four more telemetry scheduled tasks — looked up **by name** and reported as *found vs disabled* instead of a blind "done" — plus an optional **firewall block** for the telemetry service that flips Windows' own DiagTrack rules. Guarded by tests 47–50.
 - **Three popular tweaks verified against Microsoft's documentation and declined** — regrouping svchost (`SvcHostSplitThresholdInKB`), lowering `ServicesPipeTimeout`, and disabling the prefetcher. They are listed with their reasons on *What was excluded*, and test 51 fails if any of them is ever quietly added back.
-- **Static test harness expanded to 55 checks** — every new detector verified against a deliberately broken copy.
+- **Static test harness expanded to 56 checks** — every new detector verified against a deliberately broken copy.
 - **Elevation works when the script path contains an apostrophe** (e.g. `C:\Users\O'Brien\`) — the UAC relaunch now passes `%~f0` via `$env:PT_SELF` instead of embedding it in `Start-Process -FilePath '…'`, where a `'` broke the string and killed the relaunch with no prompt.
 - **Per-value backups decline non-ASCII string data instead of corrupting it.** Undo files are written with `echo` (console code page), so non-ASCII `REG_SZ` *prior data* came back as mojibake; such values are now marked *not auto-restorable — use the full backup* (like `REG_BINARY`) and skipped on preset restore. The full `reg export` still restores them correctly.
 - **Idempotent registry writes.** Applying a value already at the target prints `[SKIP] … already set` and returns **before** writing a backup, so a re-run or re-applied preset can't bury the true-original undo.
@@ -340,7 +340,7 @@ changed.
 - **Fixed: the Ultimate power plan never activated, and clones piled up.** `powercfg -duplicatescheme` with no destination GUID minted a random-GUID copy each run while `/setactive` targeted the canonical GUID, so the High Performance fallback activated and a clone accrued per power-core run. Duplication now targets the canonical GUID itself. Guarded by test 10.
 - **Fixed: a failed OpenAsar download could install a broken file.** `Invoke-WebRequest` can leave a partial file, and both paths only checked existence; they now trust the child exit code and delete the leftover first. Guarded by test 11.
 - **No more false "success" messages (first wave).** The **full registry backup** confirms both `HKLM` and `HKCU` exports wrote a file (else `[ERROR]`); **DNS apply/reset** counts adapters changed vs failed (e.g. `3 adapter(s), 0 failed`); **OpenAsar** reports which backup was saved, since AV / Controlled Folder Access often blocks the copy into Discord's own folder.
-- **Performance: a single `Win32PrioritySeparation` choice** — `1` = 42, `2` = Windows default, `N` = unchanged. The old paired prompts could be a no-op and snapshotted the just-set 42 as the undo.
+- **Performance: a `Win32PrioritySeparation` choice** — `1` = 42 (0x2A, short fixed quantum — the classic tweak; the Windows dialog will show *background services*, because a fixed quantum treats all apps equally), `2` = 38 (0x26, short variable quantum — the value Windows' *Programs* radio writes, foreground gets the longer slice), `3` = 2 (Windows default — undoes a previous 42 or 38), `N` = unchanged. One mutually-exclusive prompt, so its single-value `.reg` backup captures the true prior value rather than one just written.
 - **Prefetch is no longer cleared** — it's placebo (Windows rebuilds it) and against the script's own stance; removed from cleanup/recommended/presets and listed on **What was excluded**.
 - **Backup-folder manager (Backups & status).** New *Manage / open backup folder* item summarizes `Documents\PerfTweaks_Backups` by category (counts + MB), opens it in Explorer, and offers a safe prune of **older full-registry exports** while keeping the newest pair. The small `.reg` and preset-JSON undo data is never deleted.
 - **In-app single-value restore (Backups & status).** New *Restore a single value backup (.reg)* item lists per-value `.reg` backups (newest first) and re-imports your pick, logged; full-registry exports (`FullReg_*.reg`) are filtered out. The preset-JSON restore is unchanged.
@@ -411,7 +411,7 @@ documentation and left out on the evidence:
 
 Sincript ships with a **static-analysis** harness in `tests/`. `PerfTweaks.cmd`
 is interactive and changes the system, so it can't be safely unit-tested by
-*running* it; instead `tests/Run-Tests.ps1` (55 checks on stock Windows
+*running* it; instead `tests/Run-Tests.ps1` (56 checks on stock Windows
 PowerShell 5.1 — no Pester) parses the script text for invariants that tend to
 break silently, including:
 
@@ -432,7 +432,7 @@ Run from the repository root:
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 ```
 
-Exit code `0` means all 55 checks passed; `1` means at least one failed, with
+Exit code `0` means all 56 checks passed; `1` means at least one failed, with
 the offending detail printed. See `tests/README.md` for the full numbered list.
 
 ---
