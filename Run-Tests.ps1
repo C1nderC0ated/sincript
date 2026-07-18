@@ -1239,6 +1239,46 @@ Invoke-Test 'User input is never percent-expanded unquoted inside a block' {
     Assert-True ($bad.Count -eq 0) ("User input percent-expanded UNQUOTED inside a ( ) block - a ')' in the value (e.g. a path under 'Program Files (x86)') ends the block early and aborts the script. Use !var! or quote it:`n  " + ($bad -join "`n  "))
 }
 
+# ===============================================================================
+# 56. Win32PrioritySeparation values must match their labels. The value is a
+#     bitfield; bits 3-2 are the quantum TYPE (1=variable, 2=fixed). Per Microsoft,
+#     variable = the client default where the FOREGROUND app gets a longer quantum;
+#     fixed = the Windows Server default, all apps equal. So a value sold as
+#     "foreground" MUST have a variable quantum (bits 3-2 == 1), and Windows'
+#     "Programs" radio writes exactly 38 (0x26). This test exists because 42 (0x2A)
+#     was shipped labelled "strong foreground boost" while carrying a FIXED quantum
+#     - so the Processor Scheduling dialog honestly showed "background services",
+#     the opposite of the label. A number cannot lie about its own bits; the label
+#     can, so pin the bits.
+# ===============================================================================
+Invoke-Test 'Win32PrioritySeparation foreground value has a variable quantum' {
+    $cmd = Read-Lines $CmdPath
+
+    function QuantumType([int]$v) { return ($v -shr 2) -band 3 }   # 1=variable, 2=fixed
+
+    # :DoWin32_38 is the named "foreground/Programs" mode - it MUST write a variable
+    # quantum, or it is mislabelled the way 42 was.
+    $do38raw = Get-RoutineBody -Lines $cmd -Label 'DoWin32_38'
+    $do38 = @($do38raw | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($do38.Length -gt 0) ':DoWin32_38 is missing - the honest foreground value (38/0x26) is gone.'
+    Assert-True ($do38 -match 'REG_DWORD 38\b') ':DoWin32_38 no longer writes 38 - the "Programs"/foreground value.'
+    Assert-True ((QuantumType 38) -eq 1) 'Sanity: 38 (0x26) must decode to a variable quantum.'
+
+    # 38 is what the Windows "Programs" radio writes - hard-pin it so a future edit
+    # cannot quietly swap in a fixed-quantum value under the foreground label.
+    Assert-True ($do38 -notmatch 'REG_DWORD (?:24|26|42) ') ':DoWin32_38 writes a value other than 38 as its REG_DWORD operand - if it is the foreground mode it must stay 38 (0x26), a variable quantum.'
+
+    # And the menu option that presents the foreground choice must write 38, not a
+    # fixed-quantum value dressed up as foreground.
+    $perfraw = Get-RoutineBody -Lines $cmd -Label 'Performance'
+    $perf = @($perfraw | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($perf -match '(?i)Win32PrioritySeparation" REG_DWORD 38') ':Performance no longer offers the honest foreground value 38 (0x26, variable quantum).'
+
+    # 42 remains valid and is allowed to be the default - but it is a FIXED quantum,
+    # so it must NOT be the one carrying a "foreground"-only promise in its writer tag.
+    Assert-True ((QuantumType 42) -eq 2) 'Sanity: 42 (0x2A) is a fixed quantum - it is the throughput value, not the foreground one.'
+}
+
 # ---- summary ------------------------------------------------------------------
 Write-Host ""
 if ($script:Failures.Count -eq 0) {
