@@ -1067,10 +1067,12 @@ rem ============================================================================
 cls
 call :Logo
 echo =====================  Disable CPU mitigations (RISKY)  ===========================
-echo  Disables Spectre/Meltdown/MDS/SSBD/L1TF mitigations (FeatureSettingsOverride=3).
+echo  Disables Spectre/Meltdown/MDS/SSBD/L1TF ^(bits 0-1^) AND Downfall/GDS ^(bit 25^).
 echo  Can improve CPU performance but REDUCES security. Reversible (option 2).
-echo  Downfall/GDS has no separate switch (microcode-driven); this is the broadest
-echo  documented override. Verify after reboot: PowerShell ^> Get-SpeculationControlSettings
+echo  Per Microsoft KB5029778 Downfall/GDS DOES have its own bit ^(0x2000000^); the older
+echo  "3" alone left it mitigated. Combined value is 0x2000003 ^(decimal 33554435^), and
+echo  the mask must cover the same bits or the extra bit is written but ignored.
+echo  Verify after reboot: PowerShell ^> Get-SpeculationControlSettings
 echo =====================================================================================
 set "_rp=Y"
 set /p "_rp=Create a restore point first? (Y/N): "
@@ -1079,9 +1081,14 @@ set "_c="
 set /p "_c=Disable mitigations now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
 set "_FAILS=0"
-call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverride" REG_DWORD 3 "Disable CPU mitigations"
-call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverrideMask" REG_DWORD 3 "Mitigations override mask"
-call :Summary "Mitigations disabled. REBOOT required."
+:: 33554435 = 0x2000003 = bit0|bit1 (Spectre/Meltdown/MDS/SSBD/L1TF) | bit25 (Downfall/GDS).
+:: The mask MUST carry the same bits: Windows only honours override bits that are set in
+:: the mask, so a mask of 3 would silently drop the Downfall bit - the exact reason the
+:: old code missed it. Pass DECIMAL: :SafeRegAdd's idempotence does set /a on the value,
+:: and reg query returns 0x02000003 which set /a reads back to the same 33554435.
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverride" REG_DWORD 33554435 "Disable CPU mitigations (Spectre/Meltdown + Downfall)"
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverrideMask" REG_DWORD 33554435 "Mitigations override mask (covers Downfall bit)"
+call :Summary "Mitigations disabled (incl. Downfall/GDS). REBOOT required."
 pause
 goto MenuAdvanced
 
@@ -1090,9 +1097,12 @@ cls
 call :Logo
 echo =====================  Re-enable CPU mitigations (secure)  ========================
 set "_FAILS=0"
-call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverride" REG_DWORD 0 "Re-enable CPU mitigations"
-call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverrideMask" REG_DWORD 3 "Mitigations override mask"
-call :Summary "Mitigations restored to secure default. REBOOT required."
+:: Override=0 clears every override bit (all mitigations back ON). The mask must cover the
+:: Downfall bit too (0x2000003), otherwise re-enabling would leave bit25 outside the mask
+:: and a machine previously set by the OLD disable path could keep a stale Downfall state.
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverride" REG_DWORD 0 "Re-enable CPU mitigations (incl. Downfall)"
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverrideMask" REG_DWORD 33554435 "Mitigations override mask (covers Downfall bit)"
+call :Summary "Mitigations restored to secure default (incl. Downfall/GDS). REBOOT required."
 pause
 goto MenuAdvanced
 rem =====================================================================================
@@ -1387,7 +1397,8 @@ echo [GPU scheduling / HAGS]  (0x2 = on/default, 0x1 = off; toggle under Advance
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode"
 echo [TCP global]
 netsh int tcp show global | findstr ":"
-echo [CPU mitigations] FeatureSettingsOverride above: 3=disabled, 0/(not set)=on.
+echo [CPU mitigations] FeatureSettingsOverride above: 0x2000003 ^(33554435^)=all off incl.
+echo                   Downfall; 0x3=Spectre/Meltdown off only; 0/^(not set^)=all on.
 echo                   Detail: PowerShell ^> Get-SpeculationControlSettings
 echo [Memory compression]  (True = on/default, False = disabled via Advanced)
 start "" /min /wait powershell -NoProfile -Command "try{ $m=Get-MMAgent; $s='  MemoryCompression=' + $m.MemoryCompression + '   PageCombining=' + $m.PageCombining }catch{ $s='  (MMAgent not available on this system)' }; $s | Out-File -FilePath (Join-Path $env:TEMP 'pt_mma.txt') -Encoding ASCII"
