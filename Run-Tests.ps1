@@ -1279,6 +1279,55 @@ Invoke-Test 'Win32PrioritySeparation foreground value has a variable quantum' {
     Assert-True ((QuantumType 42) -eq 2) 'Sanity: 42 (0x2A) is a fixed quantum - it is the throughput value, not the foreground one.'
 }
 
+# ===============================================================================
+# 57. CPU-mitigation values must set the right BITS and cover them with the mask.
+#     FeatureSettingsOverride is a bitfield: bits 0-1 gate Spectre/Meltdown/MDS,
+#     bit 25 (0x2000000) gates Downfall/GDS (Microsoft KB5029778). Windows only
+#     honours override bits that are ALSO set in FeatureSettingsOverrideMask - so
+#     an override that sets a bit the mask does not cover is written and then
+#     ignored. That was the original bug: Override=3, Mask=3 left Downfall (bit 25)
+#     untouched, so a second tool correctly reported it still mitigated. This test
+#     decodes the actual numbers and checks the bit math, in both directions.
+# ===============================================================================
+Invoke-Test 'CPU-mitigation disable covers the Downfall bit and the mask agrees' {
+    $cmd = Read-Lines $CmdPath
+    $GDS = 0x2000000   # bit 25 - Downfall/GDS
+    $SM  = 0x3         # bits 0-1 - Spectre/Meltdown/MDS/SSBD/L1TF
+
+    function DwordFor([string[]]$body, [string]$valueName) {
+        # find the SafeRegAdd line for this value name and pull its REG_DWORD operand
+        foreach ($ln in $body) {
+            if ($ln -match ('(?i)"' + [regex]::Escape($valueName) + '"\s+REG_DWORD\s+(\d+)')) {
+                return [int64]$Matches[1]
+            }
+        }
+        return -1
+    }
+
+    $disRaw = Get-RoutineBody -Lines $cmd -Label 'DisableMitigations'
+    $dis = @($disRaw)
+    $ovr = DwordFor $dis 'FeatureSettingsOverride'
+    $msk = DwordFor $dis 'FeatureSettingsOverrideMask'
+    Assert-True ($ovr -ge 0) ':DisableMitigations has no FeatureSettingsOverride write.'
+    Assert-True ($msk -ge 0) ':DisableMitigations has no FeatureSettingsOverrideMask write.'
+
+    # the override must actually set the Downfall bit AND the Spectre/Meltdown bits
+    Assert-True (($ovr -band $GDS) -eq $GDS) ":DisableMitigations Override ($ovr) does not set the Downfall/GDS bit 0x2000000 - Downfall stays mitigated (the original bug)."
+    Assert-True (($ovr -band $SM) -eq $SM)   ":DisableMitigations Override ($ovr) no longer sets the Spectre/Meltdown bits 0x3."
+
+    # every bit the override sets MUST be covered by the mask, or Windows ignores it
+    Assert-True (($ovr -band $msk) -eq $ovr) ":DisableMitigations mask ($msk) does not cover every override bit ($ovr) - the uncovered bits are written but ignored (this is exactly how Downfall was missed)."
+    Assert-True (($msk -band $GDS) -eq $GDS) ":DisableMitigations mask ($msk) does not cover the Downfall bit 0x2000000."
+
+    # re-enable: override back to 0 (all mitigations on), mask still covers the Downfall bit
+    $enRaw = Get-RoutineBody -Lines $cmd -Label 'EnableMitigations'
+    $en = @($enRaw)
+    $eovr = DwordFor $en 'FeatureSettingsOverride'
+    $emsk = DwordFor $en 'FeatureSettingsOverrideMask'
+    Assert-True ($eovr -eq 0) ":EnableMitigations Override should be 0 to restore every mitigation, found $eovr."
+    Assert-True (($emsk -band $GDS) -eq $GDS) ":EnableMitigations mask ($emsk) does not cover the Downfall bit - a machine set by the old disable path could keep a stale Downfall state."
+}
+
 # ---- summary ------------------------------------------------------------------
 Write-Host ""
 if ($script:Failures.Count -eq 0) {
