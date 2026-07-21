@@ -513,6 +513,9 @@ call :DiskAdvisory
 set /p "_q10=  Disable SysMain / Superfetch - less background disk and CPU on an SSD (keep it ON for a mechanical HDD)? (Y/N): "
 if /i "%_q10%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\SysMain" "Start" REG_DWORD 4 "SysMain (Superfetch) disabled"
 if /i "%_q10%"=="Y" call :Run "sc stop SysMain"
+set "_q11=" & set /p "_q11=  Show verbose boot/logon messages - a diagnostic that names each startup step, so you can SEE what is slow (not a speed-up itself)? (Y/N): "
+if /i "%_q11%"=="Y" call :SafeRegAdd "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" "verbosestatus" REG_DWORD 1 "Verbose startup/logon status messages"
+if /i "%_q11%"=="Y" call :VerboseStatusNote
 call :Summary "Performance tweaks applied."
 pause
 goto MainMenu
@@ -581,6 +584,8 @@ call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppCompat" "DisableIn
 call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled" REG_DWORD 0 "Advertising ID off"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" "DisabledByGroupPolicy" REG_DWORD 1 "Advertising ID off (policy)"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsConsumerFeatures" REG_DWORD 1 "Suggested apps off"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Dsh" "AllowNewsAndInterests" REG_DWORD 0 "Widgets / News and Interests off"
+call :SafeRegAdd "HKCU\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsSpotlightOnLockScreen" REG_DWORD 1 "Windows Spotlight on lock screen off"
 call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SystemPaneSuggestionsEnabled" REG_DWORD 0 "Start suggestions off"
 call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-338389Enabled" REG_DWORD 0 "Tips/tricks off"
 call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SilentInstalledAppsEnabled" REG_DWORD 0 "Silent app install off"
@@ -2256,6 +2261,24 @@ echo   [ADVISORY] Could not identify the Windows disk type - if it is a mechanic
 echo              leave SysMain enabled; it mainly helps spinning disks.
 goto :eof
 
+:VerboseStatusNote
+rem  Honest footnote for verbosestatus: Windows IGNORES it if DisableStatusMessages=1
+rem  exists in the same key (documented). Read that back and tell the user the truth.
+setlocal EnableDelayedExpansion
+set "_dsm="
+for /f "delims=" %%L in ('reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "DisableStatusMessages" 2^>nul ^| findstr /I /C:"REG_DWORD"') do set "_dsm=%%L"
+set "_dsmon="
+if defined _dsm echo !_dsm! | findstr /I /C:"0x1" >nul && set "_dsmon=1"
+if defined _dsmon (
+    echo   [i] Note: DisableStatusMessages=1 is set, which OVERRIDES verbose status -
+    echo       Windows shows no boot messages until that is cleared. verbosestatus is
+    echo       written and backed up, but stays dormant until then.
+) else (
+    echo   [i] Verbose messages will appear at the next startup/logon. To turn them off,
+    echo       restore this value from the Backups menu or set verbosestatus back to 0.
+)
+endlocal & goto :eof
+
 rem =====================================================================================
 rem  PRIVACY HELPERS: extra telemetry tasks, and the DiagTrack firewall block
 rem =====================================================================================
@@ -2651,7 +2674,7 @@ if "%_rbOK%"=="1" (
 ) else (
     echo [ERROR] Full registry backup FAILED or is incomplete - do NOT rely on it.
     echo         Make sure this window is elevated and that the folder is writable:
-    echo         %BACKUP_DIR%
+    echo         !BACKUP_DIR!
     call :Log "FAIL: full registry export (HKLM and/or HKCU missing or errored)"
 )
 goto :eof
