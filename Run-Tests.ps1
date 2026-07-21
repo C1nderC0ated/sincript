@@ -1328,6 +1328,48 @@ Invoke-Test 'CPU-mitigation disable covers the Downfall bit and the mask agrees'
     Assert-True (($emsk -band $GDS) -eq $GDS) ":EnableMitigations mask ($emsk) does not cover the Downfall bit - a machine set by the old disable path could keep a stale Downfall state."
 }
 
+# ===============================================================================
+# 58. :Summary must never expand %~1 inside a parenthesised ( ) block. cmd parses
+#     a block whole at parse time, so the FIRST unescaped ")" inside the argument
+#     closes the block early and crashes the script ("was unexpected at this
+#     time"). Callers legitimately pass "(incl. Downfall/GDS)", "()", etc. This is
+#     the same class as test 55 (set /p value in a block) but through a ROUTINE
+#     ARGUMENT, which 55 does not see. The routine is written with goto branching
+#     for exactly this reason; this test fails if someone "tidies" it back into an
+#     if(...)else(...) block, and separately proves a paren-laden arg is safe.
+# ===============================================================================
+Invoke-Test ':Summary echoes its argument outside any ( ) block' {
+    $cmd = Read-Lines $CmdPath
+    $bodyRaw = Get-RoutineBody -Lines $cmd -Label 'Summary'
+    $body = @($bodyRaw)
+    Assert-True ($body.Count -gt 0) ':Summary not found.'
+
+    # Walk real block depth (ignore rem lines and ^-escaped / quoted parens). Assert every
+    # line that echoes %~1 sits at depth 0.
+    $depth = 0
+    $echoDepths = @()
+    foreach ($ln in $body) {
+        $s = $ln.Trim()
+        if ($s -match '^(?i)rem\b') { 
+            if ($ln -match '%~1') { }   # rem mentioning %~1 is fine, skip depth work
+            continue 
+        }
+        # does this line echo the argument (unquoted, so a ) in it would matter)?
+        if ($ln -match '(?i)^\s*echo\b.*%~1') { $echoDepths += $depth }
+        # update depth: a line ending in a bare ( opens; a lone ) closes
+        $stripped = $s
+        if ($stripped -match '\($' -and $stripped -notmatch '\^\($') { $depth++ }
+        if ($stripped -eq ')' -or $stripped -match '^\)\s') { $depth-- }
+    }
+    Assert-True ($echoDepths.Count -ge 1) ':Summary no longer echoes %~1 at all - unexpected.'
+    $bad = @($echoDepths | Where-Object { $_ -ne 0 })
+    Assert-True ($bad.Count -eq 0) ":Summary echoes %~1 inside a ( ) block (depth $($bad -join ',')). A ')' in the caller's text - e.g. '(incl. Downfall/GDS)' - will close the block early and crash the script. Keep :Summary block-free (goto branching), do not use if(...)else(...)."
+
+    # Positive: at least one real caller passes parens, proving the safe path is exercised.
+    $parenCaller = @($cmd | Where-Object { $_ -match '(?i)call :Summary "[^"]*\([^"]*\)[^"]*"' })
+    Assert-True ($parenCaller.Count -ge 1) 'No caller passes parenthesised Summary text - the regression that motivated this test is not represented; add/keep one (e.g. the mitigations "(incl. Downfall/GDS)" line).'
+}
+
 # ---- summary ------------------------------------------------------------------
 Write-Host ""
 if ($script:Failures.Count -eq 0) {
