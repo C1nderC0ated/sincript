@@ -2402,14 +2402,25 @@ goto :eof
 rem %1 = success phrase. Prints [OK] if no registry write failed since _FAILS was last reset,
 rem otherwise an honest [WARN] with the count. :SafeRegAdd / :SafeRegDelete keep _FAILS current
 rem across their endlocal, so this reflects the REAL outcome (e.g. not-elevated HKLM writes).
+rem
+rem  NOTE: this routine branches with goto, NOT an if(...)else(...) block, ON PURPOSE.
+rem  cmd parses a parenthesised block as a whole at parse time, so the FIRST unescaped
+rem  ")" inside %~1 would close the block early and crash the script ("was unexpected at
+rem  this time"). Callers legitimately pass text like "(incl. Downfall/GDS)", so %~1 must
+rem  never sit inside ( ). Keep it block-free - do not "tidy" this back into if/else.
 if not defined _FAILS set "_FAILS=0"
 if not defined _ELEV set "_ELEV=1"
-if "%_FAILS%"=="0" (
-    echo [OK] %~1
-) else (
-    echo [WARN] %~1 -- %_FAILS% change^(s^) could NOT be applied. See the [FAIL] line^(s^) above.
-    if "%_ELEV%"=="0" ( echo        This window is NOT elevated - close it and use Run as administrator, then retry. ) else ( echo        This window is elevated, so those keys are protected or held by Windows. See the log. )
-)
+if not "%_FAILS%"=="0" goto _sum_warn
+echo [OK] %~1
+goto _sum_done
+:_sum_warn
+echo [WARN] %~1 -- %_FAILS% change(s) could NOT be applied. See the [FAIL] line(s) above.
+if "%_ELEV%"=="0" goto _sum_notelev
+echo        This window is elevated, so those keys are protected or held by Windows. See the log.
+goto _sum_done
+:_sum_notelev
+echo        This window is NOT elevated - close it and use Run as administrator, then retry.
+:_sum_done
 rem  Tracking is per-action: clear it here so a later untracked action (e.g. cleanup) can't inherit it.
 set "_RUNTRACK="
 goto :eof
