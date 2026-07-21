@@ -1370,6 +1370,35 @@ Invoke-Test ':Summary echoes its argument outside any ( ) block' {
     Assert-True ($parenCaller.Count -ge 1) 'No caller passes parenthesised Summary text - the regression that motivated this test is not represented; add/keep one (e.g. the mitigations "(incl. Downfall/GDS)" line).'
 }
 
+# 59. The doc-verified additions must stay present and correct. Each was checked
+#     against Microsoft's documentation (NewsAndInterests / CloudContent / verbose
+#     status policies), is reversible via the per-value backup, and rides the same
+#     :SafeRegAdd path as every other tweak. This test fails if any is dropped or its
+#     value drifts, and it pins the honesty helper for verbosestatus (which warns when
+#     DisableStatusMessages=1 would override it) so the additions can't lose their
+#     truthful reporting.
+# ===============================================================================
+Invoke-Test 'Documented additions present, correct, and honestly reported' {
+    $cmd = Read-Lines $CmdPath
+    $all = $cmd -join "`n"
+
+    # 1. Widgets off - HKLM Dsh AllowNewsAndInterests = 0
+    Assert-True ($all -match '(?i)SafeRegAdd\s+"HKLM\\SOFTWARE\\Policies\\Microsoft\\Dsh"\s+"AllowNewsAndInterests"\s+REG_DWORD\s+0\b') 'Widgets (AllowNewsAndInterests=0) missing or wrong value.'
+
+    # 2. Spotlight on lock screen off - HKCU CloudContent DisableWindowsSpotlightOnLockScreen = 1
+    Assert-True ($all -match '(?i)SafeRegAdd\s+"HKCU\\SOFTWARE\\Policies\\Microsoft\\Windows\\CloudContent"\s+"DisableWindowsSpotlightOnLockScreen"\s+REG_DWORD\s+1\b') 'Spotlight lock-screen (DisableWindowsSpotlightOnLockScreen=1) missing or wrong value.'
+
+    # 3. VerboseStatus - HKLM Policies\System verbosestatus = 1 (a diagnostic, opt-in)
+    Assert-True ($all -match '(?i)SafeRegAdd\s+"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"\s+"verbosestatus"\s+REG_DWORD\s+1\b') 'VerboseStatus (verbosestatus=1) missing or wrong value.'
+
+    # 4. The honesty helper exists and checks the overriding key by name.
+    $noteRaw = Get-RoutineBody -Lines $cmd -Label 'VerboseStatusNote'
+    $note = @($noteRaw)
+    Assert-True ($note.Count -gt 0) ':VerboseStatusNote helper missing - verbosestatus would lose its honest override warning.'
+    $noteJoined = $note -join "`n"
+    Assert-True ($noteJoined -match '(?i)DisableStatusMessages') ':VerboseStatusNote no longer checks DisableStatusMessages - the override caveat is gone.'
+}
+
 # ---- summary ------------------------------------------------------------------
 Write-Host ""
 if ($script:Failures.Count -eq 0) {
