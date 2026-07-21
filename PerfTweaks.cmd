@@ -411,10 +411,21 @@ echo ===========================================================================
 set "_c="
 set /p "_c=Re-register the Store now? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
+if "%_ELEV%"=="0" (
+    echo [WARN] Not elevated - Store re-register needs Administrator for -AllUsers. Re-run as Administrator.
+    pause
+    goto MenuCleanup
+)
 echo   ^> Re-registering Microsoft Store (separate window)...
 call :Log "EXEC-PS (isolated): Store re-register"
-start "" /min /wait powershell -NoProfile -Command "Get-AppxPackage -AllUsers Microsoft.WindowsStore | ForEach-Object {Add-AppxPackage -DisableDevelopmentMode -Register ($_.InstallLocation + '\AppXManifest.xml')}"
-echo [OK] Store re-registration finished. If the Store still misbehaves, reboot and re-run.
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='Stop'; try { Get-AppxPackage -AllUsers Microsoft.WindowsStore | ForEach-Object { Add-AppxPackage -DisableDevelopmentMode -Register ($_.InstallLocation + '\AppXManifest.xml') } } catch { exit 1 }"
+if errorlevel 1 (
+    echo [ERROR] Store re-registration failed. Reboot and re-run if the Store still misbehaves.
+    call :Log "FAIL: Store re-register"
+) else (
+    echo [OK] Store re-registration finished. If the Store still misbehaves, reboot and re-run.
+    call :Log "OK: Store re-register"
+)
 pause
 goto MenuCleanup
 rem =====================================================================================
@@ -454,7 +465,7 @@ if /i not "%_c%"=="Y" goto MainMenu
 set "_FAILS=0"
 call :DoPerformanceCore
 set "_q1=" & set "_q2=" & set "_q3=" & set "_q4=" & set "_q5=" & set "_q6=" & set "_q7="
-set "_q8=" & set "_q9=" & set "_q10="
+set "_q8=" & set "_q9=" & set "_q10=" & set "_q12="
 echo.
 echo Optional knobs (small / unproven gains, or plain preference - your call):
 set /p "_q1=  SystemResponsiveness=0 (reserve less for background)? (Y/N): "
@@ -494,6 +505,8 @@ if /i "%_q4%"=="Y" call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Sessi
 set /p "_q5=  Disable Windows Game Mode (contested; some titles run smoother without it)? (Y/N): "
 if /i "%_q5%"=="Y" call :SafeRegAdd "HKCU\Software\Microsoft\GameBar" "AutoGameModeEnabled" REG_DWORD 0 "Game Mode off"
 if /i "%_q5%"=="Y" call :SafeRegAdd "HKCU\Software\Microsoft\GameBar" "AllowAutoGameMode" REG_DWORD 0 "Auto Game Mode off"
+set /p "_q12=  Disable Game Bar / Xbox Game Bar overlay leftovers (recording already off in core; this is overlay chrome - does not uninstall Xbox)? (Y/N): "
+if /i "%_q12%"=="Y" call :DoGameBarOff
 set /p "_q6=  Disable mouse acceleration / Enhance pointer precision - raw 1:1 mouse, after sign out/in? (Y/N): "
 if /i "%_q6%"=="Y" call :SafeRegAdd "HKCU\Control Panel\Mouse" "MouseSpeed" REG_SZ 0 "Mouse acceleration off"
 if /i "%_q6%"=="Y" call :SafeRegAdd "HKCU\Control Panel\Mouse" "MouseThreshold1" REG_SZ 0 "Mouse accel threshold1 off"
@@ -551,12 +564,15 @@ echo  Disables diagnostic telemetry, advertising ID, suggested apps, Cortana/web
 echo  feedback prompts, activity feed and location; stops DiagTrack and CEIP tasks.
 echo  Also turns off Windows AI features by policy - Copilot, Recall snapshots and
 echo  Click to Do - plus inking/typing personalization and online speech recognition.
+echo  Quiets remaining Start/lock Content Delivery tips, search-box suggestions, and
+echo  tailored experiences.
 echo -----------------------------------------------------------------------------------
 echo  Honest notes: the telemetry policy is written as 0 (Security). Enterprise and
 echo  Education honor 0; Home/Pro clamp it to Basic (1) - the lowest those editions
 echo  allow. Stopping DiagTrack also stops Xbox achievement sync and the Feedback Hub.
 echo  Recall policies only have visible effect on Copilot+ hardware; elsewhere they
-echo  are inert but harmless.
+echo  are inert but harmless. Start/lock "suggestions and tips" keys quiet the
+echo  Content Delivery surface - they are not Defender or security changes.
 echo =====================================================================================
 set "_c="
 set /p "_c=Apply privacy / telemetry hardening? (Y/N): "
@@ -572,6 +588,9 @@ for %%S in (CDPUserSvc OneSyncSvc PimIndexMaintenanceSvc UnistoreSvc UserDataSvc
 set "_fw="
 set /p "_fw=Also block the telemetry service in Windows Firewall (belt-and-braces if an update re-enables it)? (Y/N): "
 if /i "%_fw%"=="Y" call :DiagTrackFirewall
+set "_edge="
+set /p "_edge=Also reduce Edge first-run / sidebar / shopping nudges (Edge only; does not uninstall Edge)? (Y/N): "
+if /i "%_edge%"=="Y" call :DoEdgeNudgesOff
 call :Summary "Privacy tweaks applied."
 pause
 goto MainMenu
@@ -588,7 +607,20 @@ call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Dsh" "AllowNewsAndInterests" 
 call :SafeRegAdd "HKCU\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsSpotlightOnLockScreen" REG_DWORD 1 "Windows Spotlight on lock screen off"
 call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SystemPaneSuggestionsEnabled" REG_DWORD 0 "Start suggestions off"
 call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-338389Enabled" REG_DWORD 0 "Tips/tricks off"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-338387Enabled" REG_DWORD 0 "Get tips/suggestions off"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-338393Enabled" REG_DWORD 0 "Content Delivery 338393 off"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-353694Enabled" REG_DWORD 0 "Content Delivery 353694 off"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-353696Enabled" REG_DWORD 0 "Content Delivery 353696 off"
 call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SilentInstalledAppsEnabled" REG_DWORD 0 "Silent app install off"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SoftLandingEnabled" REG_DWORD 0 "Soft Landing tips off"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "PreInstalledAppsEnabled" REG_DWORD 0 "Preinstalled app suggestions off"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "OemPreInstalledAppsEnabled" REG_DWORD 0 "OEM preinstalled app suggestions off"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "RotatingLockScreenEnabled" REG_DWORD 0 "Rotating lock screen off"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "RotatingLockScreenOverlayEnabled" REG_DWORD 0 "Lock screen overlay fun facts off"
+call :SafeRegAdd "HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer" "DisableSearchBoxSuggestions" REG_DWORD 1 "Search box suggestions off (user policy)"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\Explorer" "DisableSearchBoxSuggestions" REG_DWORD 1 "Search box suggestions off (policy)"
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Privacy" "TailoredExperiencesWithDiagnosticDataEnabled" REG_DWORD 0 "Tailored experiences off"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableTailoredExperiencesWithDiagnosticData" REG_DWORD 1 "Tailored experiences off (policy)"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search" "AllowCortana" REG_DWORD 0 "Cortana off"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search" "DisableWebSearch" REG_DWORD 1 "Web search in Start off"
 call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search" "ConnectedSearchUseWeb" REG_DWORD 0 "Connected web search off"
@@ -957,11 +989,18 @@ call :Log "SteamLight written to !_STEAMDIR!\SteamLight.bat"
 echo   ^> Creating Desktop shortcut...
 rem  Pass the Steam path via an env var (not interpolated into the PS string) so a path with an
 rem  apostrophe (e.g. C:\Users\O'Brien\Steam) can't break the single-quoted PS literals.
+rem  Exit 1 if the .lnk did not land - COM / Desktop-redirect failures must not claim success.
 set "PT_SLDIR=!_STEAMDIR!"
-start "" /min /wait powershell -NoProfile -Command "$sd=$env:PT_SLDIR; $d=[Environment]::GetFolderPath('Desktop'); $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut((Join-Path $d 'SteamLight.lnk')); $s.TargetPath=(Join-Path $sd 'SteamLight.bat'); $s.WorkingDirectory=$sd; $s.WindowStyle=7; $s.IconLocation=((Join-Path $sd 'steam.exe')+',0'); $s.Description='Launch Steam in lightweight mode'; $s.Save()"
+start "" /min /wait powershell -NoProfile -Command "$sd=$env:PT_SLDIR; $d=[Environment]::GetFolderPath('Desktop'); $lnk=Join-Path $d 'SteamLight.lnk'; $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($lnk); $s.TargetPath=(Join-Path $sd 'SteamLight.bat'); $s.WorkingDirectory=$sd; $s.WindowStyle=7; $s.IconLocation=((Join-Path $sd 'steam.exe')+',0'); $s.Description='Launch Steam in lightweight mode'; $s.Save(); if(-not (Test-Path -LiteralPath $lnk)){ exit 1 }"
 set "PT_SLDIR="
-call :Log "SteamLight desktop shortcut created"
-echo [OK] SteamLight installed in the Steam folder, and a shortcut was placed on your Desktop.
+if errorlevel 1 (
+    echo [OK] SteamLight installed in the Steam folder.
+    echo [WARN] Desktop shortcut was not created ^(COM / Desktop redirect / permissions^).
+    call :Log "SteamLight: bat OK, Desktop shortcut failed"
+) else (
+    echo [OK] SteamLight installed in the Steam folder, and a shortcut was placed on your Desktop.
+    call :Log "SteamLight desktop shortcut created"
+)
 echo      First launch restarts Steam, so it may take a moment.
 pause
 goto MenuApps
@@ -1021,7 +1060,7 @@ rem ============================================================================
 cls
 call :Logo
 echo ===========================  Restore / reset hosts  ==============================
-echo     1.  Restore from PerfTweaks backup (hosts.bak)
+echo     1.  Restore from backup (hosts.bak, or Documents hosts_*.bak)
 echo     2.  Reset to a clean Windows default (un-blocks everything)
 echo     0.  Back
 echo =====================================================================================
@@ -1037,18 +1076,41 @@ if "%sel%"=="0" goto MenuApps
 goto RestoreHosts
 
 :RestoreHostsBak
-if not exist "%_HOSTS%.bak" (
-    echo [ERROR] No backup found at "%_HOSTS%.bak". Use option 2 to reset to default.
+set "_hsrc="
+if exist "%_HOSTS%.bak" set "_hsrc=%_HOSTS%.bak"
+if not defined _hsrc (
+    rem  :ApplyHosts may have saved only into Documents when the local .bak was blocked.
+    for /f "delims=" %%F in ('dir /b /o-d "%BACKUP_DIR%\hosts_*.bak" 2^>nul') do (
+        if not defined _hsrc set "_hsrc=%BACKUP_DIR%\%%F"
+    )
+)
+if not defined _hsrc (
+    echo [ERROR] No hosts backup found at "%_HOSTS%.bak" or in "%BACKUP_DIR%\hosts_*.bak".
+    echo         Use option 2 to reset to a clean Windows default.
     pause
     goto RestoreHosts
 )
-copy /y "%_HOSTS%.bak" "%_HOSTS%" >nul
+echo   Restoring from: !_hsrc!
+copy /y "!_hsrc!" "%_HOSTS%" >nul
 if errorlevel 1 ( echo [WARN] Restore failed ^(AV tamper protection?^). ) else ( echo [OK] hosts restored from backup. & call :Run "ipconfig /flushdns" )
 pause
 goto MenuApps
 
 :ResetHostsDefault
-if exist "%_HOSTS%" copy /y "%_HOSTS%" "%_HOSTS%.bak" >nul 2>&1
+rem  Same bargain as :ApplyHosts: never overwrite without a landed backup when a hosts
+rem  file already exists. A best-effort copy that fails must abort, not claim hosts.bak.
+set "_hbak=0"
+if exist "%_HOSTS%" (
+    copy /y "%_HOSTS%" "%_HOSTS%.bak" >nul 2>&1 && set "_hbak=1"
+    if "!_hbak!"=="0" (
+        echo.
+        echo [ERROR] Could not back up the current hosts file ^(AV / Controlled Folder Access / read-only^).
+        echo         Aborting so your existing hosts is NOT overwritten without a backup.
+        call :Log "ABORT: hosts reset - no backup written, existing hosts left intact"
+        pause
+        goto RestoreHosts
+    )
+)
 (
 echo # Copyright ^(c^) 1993-2009 Microsoft Corp.
 echo #
@@ -1062,7 +1124,16 @@ echo # localhost name resolution is handled within DNS itself.
 echo #	127.0.0.1       localhost
 echo #	::1             localhost
 ) > "%_HOSTS%"
-if errorlevel 1 ( echo [WARN] Reset failed ^(AV tamper protection?^). ) else ( echo [OK] hosts reset to Windows default ^(old one saved as hosts.bak^). & call :Run "ipconfig /flushdns" )
+if errorlevel 1 (
+    echo [WARN] Reset failed ^(AV tamper protection?^).
+) else (
+    if exist "%_HOSTS%.bak" (
+        echo [OK] hosts reset to Windows default ^(old one saved as hosts.bak^).
+    ) else (
+        echo [OK] hosts reset to Windows default.
+    )
+    call :Run "ipconfig /flushdns"
+)
 pause
 goto MenuApps
 rem =====================================================================================
@@ -1205,11 +1276,22 @@ if /i not "%_c%"=="Y" goto MenuAdvanced
 rem  Launch PowerShell in a SEPARATE minimized window. Running powershell inside THIS
 rem  window makes it apply its own console font/size (shows up as bold + small) until the
 rem  window is closed; a separate window keeps this window's Consolas font intact.
+if "%_ELEV%"=="0" (
+    echo [WARN] Not elevated - memory compression was NOT changed. Re-run as Administrator.
+    pause
+    goto MenuAdvanced
+)
 echo   ^> Disabling memory compression and page combining...
 call :Log "EXEC-PS (isolated): Disable-MMAgent -MemoryCompression / -PageCombining"
-start "" /min /wait powershell -NoProfile -Command "try{Disable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue}catch{}; try{Disable-MMAgent -PageCombining -ErrorAction SilentlyContinue}catch{}"
-call :Log "Done: Disable-MMAgent"
-if "%_ELEV%"=="0" ( echo [WARN] Not elevated - memory compression was NOT changed. Re-run as Administrator. ) else ( echo [OK] Memory compression / page combining disabled. REBOOT to fully apply. )
+rem  Stop swallowing failures: exit nonzero if either Disable-MMAgent throws.
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='Stop'; try{ Disable-MMAgent -MemoryCompression; Disable-MMAgent -PageCombining; exit 0 }catch{ exit 1 }"
+if errorlevel 1 (
+    echo [ERROR] Memory compression / page combining could not be disabled. Reboot and re-run as Administrator.
+    call :Log "FAIL: Disable-MMAgent"
+) else (
+    echo [OK] Memory compression / page combining disabled. REBOOT to fully apply.
+    call :Log "OK: Disable-MMAgent"
+)
 pause
 goto MenuAdvanced
 rem =====================================================================================
@@ -1231,13 +1313,8 @@ echo  large undocumented GPU registry tweaks are NOT applied (they can cause cra
 set "_c="
 set /p "_c=Apply NVIDIA telemetry-off? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuAdvanced
-set "_FAILS=0" & set "_RUNTRACK=1"
-call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport1_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport2_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport3_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport4_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvTmMon_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvDriverUpdateCheckDaily_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
+set "_FAILS=0"
+call :DisableNvidiaTelemetryTasks
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\Startup" "SendTelemetryData" REG_DWORD 0 "NVIDIA telemetry off"
 call :SafeRegAdd "HKLM\SOFTWARE\NVIDIA Corporation\NvControlPanel2\Client" "OptInOrOutPreference" REG_DWORD 0 "NVIDIA opt-out"
 call :Summary "NVIDIA telemetry / tasks disabled."
@@ -1547,6 +1624,7 @@ if errorlevel 1 (
     goto MenuApps
 )
 call :Log "TIMERRES helper copied to %_TRDIR%"
+set "_FAILS=0"
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests" REG_DWORD 1 "Global timer resolution requests on"
 schtasks /Create /F /TN "Sincript Timer Resolution" /SC ONLOGON /RL HIGHEST /TR "%_TRDIR%\SetTimerResolution.exe --resolution %_res% --no-console" >nul 2>&1
 if errorlevel 1 (
@@ -1559,7 +1637,7 @@ call :Log "TIMERRES task created res=%_res%"
 taskkill /f /im SetTimerResolution.exe >nul 2>&1
 schtasks /Run /TN "Sincript Timer Resolution" >nul 2>&1
 echo.
-echo [OK] Timer-resolution autostart installed (resolution %_res%). Runs hidden at logon.
+call :Summary "Timer-resolution autostart installed (resolution %_res%). Runs hidden at logon."
 echo      REBOOT for the system-wide effect (GlobalTimerResolutionRequests) to take hold.
 pause
 goto MenuApps
@@ -2315,6 +2393,34 @@ echo   [OK] Extra telemetry tasks: disabled !_tko! of !_tkf! found.
 call :Log "OK: TASKS extra found=!_tkf! disabled=!_tko!"
 goto :eof
 
+:DisableNvidiaTelemetryTasks
+rem  Disables NVIDIA telemetry scheduled tasks BY NAME PREFIX, not by hardcoded \TN path.
+rem  Driver updates have changed the folder/GUID suffix; schtasks /Change /TN with a stale
+rem  full path fails quietly while Summary still looked clean. Get-ScheduledTask finds each
+rem  NvTmRep_ / NvTmMon_ / NvDriverUpdateCheckDaily_ task wherever it lives.
+set "_nvres=%TEMP%\pt_nvtasks_%RANDOM%.txt"
+del "%_nvres%" >nul 2>&1
+set "PT_NV_RES=%_nvres%"
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $ts=@(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -match '^(NvTmRep_|NvTmMon_|NvDriverUpdateCheckDaily_)' }); $found=$ts.Count; $ok=0; foreach($t in $ts){ try{ Disable-ScheduledTask -InputObject $t -ErrorAction Stop | Out-Null; $ok++ }catch{} }; (''+$found+' '+$ok) | Out-File -FilePath $env:PT_NV_RES -Encoding ASCII"
+set "PT_NV_RES="
+set "_nvf=0" & set "_nvo=0"
+if exist "%_nvres%" for /f "usebackq tokens=1,2" %%a in ("%_nvres%") do ( set "_nvf=%%a" & set "_nvo=%%b" )
+del "%_nvres%" >nul 2>&1
+if "!_nvf!"=="0" (
+    echo   [SKIP] NVIDIA telemetry tasks: none found on this system.
+    call :Log "TASKS nvidia: none present"
+    goto :eof
+)
+if "!_nvo!"=="0" (
+    echo         [FAIL] NVIDIA telemetry tasks: found !_nvf! but disabled none - run as Administrator.
+    call :Log "FAIL: TASKS nvidia found=!_nvf! disabled=0"
+    set /a _FAILS+=1
+    goto :eof
+)
+echo   [OK] NVIDIA telemetry tasks: disabled !_nvo! of !_nvf! found.
+call :Log "OK: TASKS nvidia found=!_nvf! disabled=!_nvo!"
+goto :eof
+
 :DiagTrackFirewall
 rem  Blocks the telemetry service's outbound traffic by flipping Windows' OWN built-in
 rem  DiagTrack firewall rule group from Allow to Block - the same thing Sophia does, and
@@ -2523,15 +2629,29 @@ set "_desc=%~5"
 echo   [REG] !_desc!
 set "_ln="
 for /f "delims=" %%L in ('reg query "!_key!" /v "!_val!" 2^>nul ^| findstr /I /C:"REG_"') do set "_ln=%%L"
-rem  Idempotence (DWORD): if the value already equals the target, skip the backup +
-rem  write. A redundant re-apply would otherwise snapshot the already-tweaked value
-rem  as its "prior" state and bury this value's true-original per-value undo.
+rem  Idempotence (DWORD + REG_SZ): if the value already equals the target, skip the
+rem  backup + write. A redundant re-apply would otherwise snapshot the already-tweaked
+rem  value as its "prior" state and bury this value's true-original per-value undo.
 if not defined _ln goto _sraDoWrite
-if /i not "!_type!"=="REG_DWORD" goto _sraDoWrite
+if /i "!_type!"=="REG_DWORD" goto _sraIdemDword
+if /i "!_type!"=="REG_SZ" goto _sraIdemSz
+goto _sraDoWrite
+
+:_sraIdemDword
 for %%a in (!_ln!) do set "_curtok=%%a"
 set /a _curdec=_curtok 2>nul
 set /a _tgtdec=_data 2>nul
 if not "!_curdec!"=="!_tgtdec!" goto _sraDoWrite
+echo   [SKIP] !_desc! - already set.
+endlocal & goto :eof
+
+:_sraIdemSz
+set "_td=REG_!_ln:*REG_=!"
+set "_rd="
+for /f "tokens=1,*" %%a in ("!_td!") do ( set "_rt=%%a" & set "_rd=%%b" )
+if /i not "!_rt!"=="REG_SZ" goto _sraDoWrite
+if not defined _rd set "_rd="
+if not "!_rd!"=="!_data!" goto _sraDoWrite
 echo   [SKIP] !_desc! - already set.
 endlocal & goto :eof
 
@@ -2556,10 +2676,21 @@ set "_rk=!_rk:HKCC\=HKEY_CURRENT_CONFIG\!"
 >>"!_bkp!" echo.
 >>"!_bkp!" echo [!_rk!]
 call :BackupValueLine
+rem  Same bargain as PATH/hosts: no landed undo file => refuse the live write.
+if not exist "!_bkp!" (
+    echo         [FAIL] "!_desc!" was NOT applied - could not write a per-value backup ^(AV / Controlled Folder Access / disk full^).
+    call :Log "  FAIL backup !_key! !_val! - write aborted"
+    endlocal & set /a _FAILS+=1 & exit /b 1
+)
 goto _sraApply
 
 :_sraJson
 rem  ----- preset mode: append this value's prior state to the JSON backup -----
+if not exist "!PRESET_JSON_TMP!" (
+    echo         [FAIL] "!_desc!" was NOT applied - preset JSON backup is missing or unwritable.
+    call :Log "  FAIL preset backup !_key! !_val! - write aborted"
+    endlocal & set /a _FAILS+=1 & exit /b 1
+)
 call :BackupValueJson
 
 :_sraApply
@@ -2596,9 +2727,19 @@ set "_rk=!_rk:HKCC\=HKEY_CURRENT_CONFIG\!"
 >>"!_bkp!" echo.
 >>"!_bkp!" echo [!_rk!]
 call :BackupValueLine
+if not exist "!_bkp!" (
+    echo         [FAIL] "!_desc!" was NOT applied - could not write a per-value backup ^(AV / Controlled Folder Access / disk full^).
+    call :Log "  FAIL backup !_key! !_val! - write aborted"
+    endlocal & set /a _FAILS+=1 & exit /b 1
+)
 goto _srdApply
 
 :_srdJson
+if not exist "!PRESET_JSON_TMP!" (
+    echo         [FAIL] "!_desc!" was NOT applied - preset JSON backup is missing or unwritable.
+    call :Log "  FAIL preset backup !_key! !_val! - write aborted"
+    endlocal & set /a _FAILS+=1 & exit /b 1
+)
 call :BackupValueJson
 
 :_srdApply
@@ -2781,6 +2922,14 @@ set "_FAILS=0"
 set "PRESET_JSON=%BACKUP_DIR%\Preset_%_pname%_%RANDOM%%RANDOM%.json"
 set "PRESET_JSON_TMP=%PRESET_JSON%.tmp"
 break>"%PRESET_JSON_TMP%"
+if not exist "%PRESET_JSON_TMP%" (
+    echo [ERROR] Could not create the preset JSON backup in "%BACKUP_DIR%".
+    echo         Aborting so registry changes are NOT applied without an undo file.
+    call :Log "ABORT: preset begin - JSON temp not writable"
+    set "PRESET_JSON="
+    set "PRESET_JSON_TMP="
+    exit /b 1
+)
 set "PRESET_MODE=1"
 call :Log "PRESET begin: %_pname%"
 echo.
@@ -2873,6 +3022,20 @@ call :SafeRegAdd "HKCU\Software\Microsoft\GameBar" "AutoGameModeEnabled" REG_DWO
 call :SafeRegAdd "HKCU\Software\Microsoft\GameBar" "AllowAutoGameMode" REG_DWORD 0 "Auto Game Mode off"
 goto :eof
 
+:DoGameBarOff
+rem  Overlay / Game Bar chrome only - GameDVR recording is already off in :DoPerformanceCore.
+call :SafeRegAdd "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled" REG_DWORD 0 "Game Bar app capture off"
+call :SafeRegAdd "HKCU\Software\Microsoft\GameBar" "UseNexusForGameBarEnabled" REG_DWORD 0 "Game Bar Nexus off"
+call :SafeRegAdd "HKCU\Software\Microsoft\GameBar" "ShowStartupPanel" REG_DWORD 0 "Game Bar startup panel off"
+goto :eof
+
+:DoEdgeNudgesOff
+rem  Documented Edge ADMX policies (HKLM\SOFTWARE\Policies\Microsoft\Edge). Edge only.
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Edge" "HubsSidebarEnabled" REG_DWORD 0 "Edge hubs sidebar off"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Edge" "EdgeShoppingAssistantEnabled" REG_DWORD 0 "Edge shopping assistant off"
+call :SafeRegAdd "HKLM\SOFTWARE\Policies\Microsoft\Edge" "HideFirstRunExperience" REG_DWORD 1 "Edge first-run experience hidden"
+goto :eof
+
 :DoIpv6Off
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" "DisabledComponents" REG_DWORD 255 "Disable IPv6 (0xFF)"
 goto :eof
@@ -2894,18 +3057,20 @@ goto :eof
 :DoMemCompressOff
 echo   ^> Disabling memory compression and page combining (separate window)...
 call :Log "EXEC-PS (isolated): Disable-MMAgent (preset)"
-start "" /min /wait powershell -NoProfile -Command "try{Disable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue}catch{}; try{Disable-MMAgent -PageCombining -ErrorAction SilentlyContinue}catch{}"
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='Stop'; try{ Disable-MMAgent -MemoryCompression; Disable-MMAgent -PageCombining; exit 0 }catch{ exit 1 }"
+if errorlevel 1 (
+    echo         [FAIL] Memory compression / page combining was NOT disabled.
+    call :Log "FAIL: Disable-MMAgent (preset)"
+    set /a _FAILS+=1
+) else (
+    call :Log "OK: Disable-MMAgent (preset)"
+)
 goto :eof
 
 :DoGpuTelemetryOff
 if /i "%GPU%"=="amd" call :SafeRegAdd "HKLM\SOFTWARE\AMD\CN" "UserExperienceProgram" REG_DWORD 0 "AMD User Experience Program opt-out"
 if /i not "%GPU%"=="nvidia" goto :eof
-call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport1_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport2_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport3_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvTmRep_CrashReport4_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvTmMon_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
-call :Run "schtasks /Change /Disable /TN ""NvDriverUpdateCheckDaily_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}"""
+call :DisableNvidiaTelemetryTasks
 call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\Startup" "SendTelemetryData" REG_DWORD 0 "NVIDIA telemetry off"
 call :SafeRegAdd "HKLM\SOFTWARE\NVIDIA Corporation\NvControlPanel2\Client" "OptInOrOutPreference" REG_DWORD 0 "NVIDIA opt-out"
 goto :eof
@@ -2966,6 +3131,7 @@ set "_c="
 set /p "_c=Apply the LIGHT preset? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuPresets
 call :PresetBegin light
+if errorlevel 1 goto MenuPresets
 call :DoCleanupCore
 call :DoPrivacyCore
 call :DoNetworkCore
@@ -2996,6 +3162,7 @@ set "_c="
 set /p "_c=Apply the MODERATE preset? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuPresets
 call :PresetBegin moderate
+if errorlevel 1 goto MenuPresets
 call :DoCleanupCore
 call :DoPrivacyCore
 call :DoPerformanceCore
@@ -3036,6 +3203,7 @@ set "_c="
 set /p "_c=Apply the HEAVY preset? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuPresets
 call :PresetBegin heavy
+if errorlevel 1 goto MenuPresets
 call :DoCleanupCore
 call :DoPrivacyCore
 call :DoPerformanceCore
@@ -3117,7 +3285,7 @@ set "_perr=0"
 set "_pgood=0"
 set "_perrfile=%TEMP%\sincript_preset_err_%RANDOM%.txt"
 break>"%_perrfile%"
-for %%K in (CLEANUP PRIVACY PERFORMANCE POWER NETWORK OPENASAR GAMEMODE SYSRESP NETTHROTTLE LARGECACHE MINPROC BCDTIMERS IPV6 MEMCOMPRESS NVME GPUTEL NAGLE WIN32 DNS) do set "_P_%%K="
+for %%K in (CLEANUP PRIVACY PERFORMANCE POWER NETWORK OPENASAR GAMEMODE GAMEBAR EDGE SYSRESP NETTHROTTLE LARGECACHE MINPROC BCDTIMERS IPV6 MEMCOMPRESS NVME GPUTEL NAGLE WIN32 DNS) do set "_P_%%K="
 for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%_pfile%") do call :PresetCheckLine "%%A" "%%B"
 cls
 call :Logo
@@ -3148,6 +3316,7 @@ set "_rp=Y"
 set /p "_rp=Create a System Restore Point first? (Y/N): "
 if /i "%_rp%"=="Y" call :CreateRestorePoint
 call :PresetBegin custom_%_pbase%
+if errorlevel 1 goto MenuPresets
 if defined _P_CLEANUP     call :DoCleanupCore
 if defined _P_PRIVACY     call :DoPrivacyCore
 if defined _P_PERFORMANCE call :DoPerformanceCore
@@ -3157,6 +3326,8 @@ if defined _P_SYSRESP     call :DoSysResp0
 if defined _P_NETTHROTTLE call :DoNetThrottleOff
 if defined _P_LARGECACHE  call :DoLargeCacheOn
 if defined _P_GAMEMODE    call :DoGameModeOff
+if defined _P_GAMEBAR     call :DoGameBarOff
+if defined _P_EDGE        call :DoEdgeNudgesOff
 if "%_P_WIN32%"=="42"     call :DoWin32_42
 if "%_P_WIN32%"=="38"     call :DoWin32_38
 if "%_P_WIN32%"=="26"     call :DoWin32_26
@@ -3193,6 +3364,8 @@ if /i "%_k%"=="power"                 ( set "_match=1" & call :PVok POWER "%_v%"
 if /i "%_k%"=="network"               ( set "_match=1" & call :PVok NETWORK "%_v%" 1 )
 if /i "%_k%"=="openasar"              ( set "_match=1" & call :PVok OPENASAR "%_v%" 1 )
 if /i "%_k%"=="gamemode_off"          ( set "_match=1" & call :PVok GAMEMODE "%_v%" 1 )
+if /i "%_k%"=="gamebar_off"           ( set "_match=1" & call :PVok GAMEBAR "%_v%" 1 )
+if /i "%_k%"=="edge_nudges_off"       ( set "_match=1" & call :PVok EDGE "%_v%" 1 )
 if /i "%_k%"=="systemresponsiveness"  ( set "_match=1" & call :PVok SYSRESP "%_v%" 0 )
 if /i "%_k%"=="networkthrottling_off" ( set "_match=1" & call :PVok NETTHROTTLE "%_v%" 1 )
 if /i "%_k%"=="largesystemcache"      ( set "_match=1" & call :PVok LARGECACHE "%_v%" 1 )
