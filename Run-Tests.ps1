@@ -527,7 +527,10 @@ Invoke-Test ':Run counts failures only when tracked AND not elevated (no crying 
 # ===============================================================================
 Invoke-Test 'Run-based actions track failures (_RUNTRACK) and report via :Summary' {
     $cmd = Read-Lines $CmdPath
-    foreach ($r in 'Power','NetworkApply','NetReset','BcdTimers','BcdRevert','Privacy','GpuNvidia') {
+    # GpuNvidia used to be here: its schtasks /TN path went through :Run+_RUNTRACK. It now
+    # disables NVIDIA tasks by name via :DisableNvidiaTelemetryTasks (test 68), which bumps
+    # _FAILS itself - so _RUNTRACK is no longer the right contract for that action.
+    foreach ($r in 'Power','NetworkApply','NetReset','BcdTimers','BcdRevert','Privacy') {
         # Region = from :<r> to the next TOP-LEVEL label (not one starting with '_'), so a
         # sub-label like :_netNagDone / :_privSvcDone can't truncate the action before its Summary.
         $start = -1
@@ -545,14 +548,26 @@ Invoke-Test 'Run-based actions track failures (_RUNTRACK) and report via :Summar
 }
 
 # ===============================================================================
-# 26. SteamLight (Batch 4): the Steam path must reach the shortcut PS command via
-#     an env var, not be interpolated into a single-quoted PS literal - otherwise
-#     a Steam path containing an apostrophe (C:\Users\O'Brien\...) breaks it.
+# 26. Apostrophe-safe path hand-off (Batch 4 + elevation): any path that crosses
+#     into PowerShell via a quoted literal breaks on a "'" (e.g. C:\Users\O'Brien\).
+#     SteamLight stages the Steam folder in PT_SLDIR; UAC relaunch stages %~f0 in
+#     PT_SELF. Both must be read as $env:PT_* inside the PS command - never
+#     interpolated into the -Command string.
 # ===============================================================================
-Invoke-Test ':SteamLight passes the Steam path via env var (apostrophe-safe)' {
-    $b = ((Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'SteamLight') -join "`n")
+Invoke-Test 'Apostrophe-safe path hand-off via env vars (SteamLight + elevation)' {
+    $cmd = Read-Lines $CmdPath
+
+    $b = ((Get-RoutineBody -Lines $cmd -Label 'SteamLight') -join "`n")
+    Assert-True ($b.Length -gt 0) ':SteamLight body empty - cannot verify apostrophe-safe path hand-off.'
     Assert-True ($b -match '(?i)set "PT_SLDIR=') ':SteamLight no longer stages the Steam path in PT_SLDIR before the shortcut PS call (regression).'
     Assert-True ($b -match '(?i)\$env:PT_SLDIR')  ':SteamLight no longer reads the Steam path from $env:PT_SLDIR - it interpolates it into the PS string, which an apostrophe in the path would break (regression).'
+
+    # Elevation relaunch lives above the first label - pin the invocation line itself.
+    Assert-True (($cmd -join "`n") -match '(?im)^\s*set "PT_SELF=%~f0"') 'UAC relaunch no longer stages %~f0 in PT_SELF - an apostrophe in the script path would break Start-Process (regression).'
+    $elevPs = @($cmd | Where-Object { $_ -match '(?i)Start-Process\b' -and $_ -match '(?i)-Verb\s+RunAs' })
+    Assert-True ($elevPs.Count -ge 1) 'UAC relaunch Start-Process -Verb RunAs line missing - elevation path is gone.'
+    Assert-True ($elevPs[0] -match '(?i)-FilePath\s+\$env:PT_SELF\b') 'UAC relaunch no longer passes -FilePath $env:PT_SELF - embedding the path in the PS string breaks on an apostrophe (regression).'
+    Assert-True ($elevPs[0] -notmatch '%~f0') 'UAC relaunch still embeds %~f0 in the PowerShell -Command string - an apostrophe in the script path would kill the relaunch (regression).'
 }
 
 # ===============================================================================
@@ -578,7 +593,7 @@ Invoke-Test 'Preset apply reports via :Summary (gated on _FAILS), not a blind [O
 # ===============================================================================
 Invoke-Test 'Repair actions gate their status on elevation (not a blind [OK])' {
     $cmd = Read-Lines $CmdPath
-    foreach ($r in 'SfcDism','WUReset','CompactWinSxS','MemCompress') {
+    foreach ($r in 'SfcDism','WUReset','CompactWinSxS','MemCompress','StoreRepair') {
         $t = ((Get-RoutineBody -Lines $cmd -Label $r) -join "`n")
         Assert-True ($t -match '(?im)^\s*if "%_ELEV%"=="0"') ":$r no longer gates its result on elevation (%_ELEV%) - it prints a blind [OK] even when not elevated (regression)."
         Assert-True ($t -match '(?i)\[WARN\]') ":$r has no [WARN] branch for the not-elevated case (regression)."
@@ -1397,6 +1412,283 @@ Invoke-Test 'Documented additions present, correct, and honestly reported' {
     Assert-True ($note.Count -gt 0) ':VerboseStatusNote helper missing - verbosestatus would lose its honest override warning.'
     $noteJoined = $note -join "`n"
     Assert-True ($noteJoined -match '(?i)DisableStatusMessages') ':VerboseStatusNote no longer checks DisableStatusMessages - the override caveat is gone.'
+}
+
+# ===============================================================================
+# 60. Idempotent :SafeRegAdd (DWORD + REG_SZ): if the value already equals the
+#     target, skip the backup + write. A redundant re-apply would otherwise
+#     snapshot the already-tweaked value as its "prior" state and bury the
+#     true-original undo. DWORD-only skip left MenuShowDelay / WaitToKill* /
+#     Games REG_SZ unprotected on every re-run.
+# ===============================================================================
+Invoke-Test ':SafeRegAdd skips DWORD and REG_SZ writes already at the target' {
+    $bodyRaw = Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'SafeRegAdd'
+    $body = @($bodyRaw)
+    Assert-True ($body.Count -gt 0) ':SafeRegAdd body empty - cannot verify idempotent skip.'
+    $joined = $body -join "`n"
+    $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($code.Length -gt 0) ':SafeRegAdd has no executable lines after stripping echo/rem.'
+
+    # DWORD path
+    Assert-True ($code -match '(?i)!_type!"=="REG_DWORD"') ':SafeRegAdd lost its REG_DWORD idempotence gate (regression).'
+    Assert-True ($code -match '(?i)set\s+/a\s+_curdec=') ':SafeRegAdd no longer parses the current DWORD (_curdec) (regression).'
+    Assert-True ($code -match '(?i)set\s+/a\s+_tgtdec=') ':SafeRegAdd no longer parses the target DWORD (_tgtdec) (regression).'
+    Assert-True ($code -match '(?i)!_curdec!"=="!_tgtdec!"') ':SafeRegAdd no longer compares _curdec to _tgtdec (regression).'
+
+    # REG_SZ path (must be a real branch, not just a comment naming REG_SZ)
+    Assert-True ($code -match '(?i)!_type!"=="REG_SZ"') ':SafeRegAdd lost its REG_SZ idempotence gate - re-applying MenuShowDelay etc. would bury the true-original undo (regression).'
+    Assert-True ($code -match '(?i)!_rd!"=="!_data!"') ':SafeRegAdd REG_SZ path no longer compares current (_rd) to target (_data) (regression).'
+
+    Assert-True ($joined -match '(?im)^\s*echo\s+.*\[SKIP\].*already set') ':SafeRegAdd no longer prints [SKIP] ... already set (regression).'
+    Assert-True ($code -match '(?i)endlocal\s*&\s*goto\s+:eof') ':SafeRegAdd idempotent path no longer endlocal & goto :eof (regression).'
+
+    $skipAt = $joined.IndexOf('[SKIP]')
+    $writeAt = $joined.IndexOf(':_sraDoWrite')
+    if ($writeAt -lt 0) { $writeAt = $joined.IndexOf('_sraDoWrite') }
+    Assert-True ($skipAt -ge 0) ':SafeRegAdd [SKIP] marker missing from body.'
+    Assert-True ($writeAt -gt $skipAt) ':SafeRegAdd [SKIP] path is not before the write/backup entry (regression).'
+}
+
+# ===============================================================================
+# 61. No backup, no registry write (mirrors PATH/hosts): :SafeRegAdd /
+#     :SafeRegDelete must refuse the live write when the per-value .reg did not
+#     land, and must refuse when the preset JSON temp is missing.
+# ===============================================================================
+Invoke-Test ':SafeRegAdd / :SafeRegDelete abort when the per-value backup did not land' {
+    $cmd = Read-Lines $CmdPath
+    foreach ($r in 'SafeRegAdd','SafeRegDelete') {
+        $body = Get-RoutineBody -Lines $cmd -Label $r
+        $body = @($body)
+        Assert-True ($body.Count -gt 0) ":$r body empty."
+        $joined = $body -join "`n"
+        $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+        Assert-True ($joined -match 'if not exist "!_bkp!"') ":$r no longer checks that the .reg backup landed before writing - CFA/disk-full would leave no undo (regression)."
+        Assert-True ($joined -match 'FAIL backup') ":$r lost its abort/log path when the .reg backup is missing (regression)."
+        Assert-True ($joined -match 'if not exist "!PRESET_JSON_TMP!"') ":$r no longer checks the preset JSON temp before writing in PRESET_MODE (regression)."
+        $gateAt = $joined.IndexOf('if not exist "!_bkp!"')
+        $writeAt = if ($r -eq 'SafeRegAdd') { $joined.IndexOf('reg add') } else { $joined.IndexOf('reg delete') }
+        Assert-True ($gateAt -ge 0 -and $writeAt -gt $gateAt) ":$r backup-existence gate is not before the live registry write (regression)."
+        Assert-True ($code.Length -gt 0) ":$r code view empty after stripping echo/rem."
+    }
+}
+
+# ===============================================================================
+# 62. :ResetHostsDefault must require a landed hosts.bak before overwriting
+#     (same bargain as :ApplyHosts / test 18).
+# ===============================================================================
+Invoke-Test ':ResetHostsDefault aborts when hosts.bak could not be written' {
+    $body = Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'ResetHostsDefault'
+    $body = @($body)
+    Assert-True ($body.Count -gt 0) ':ResetHostsDefault body empty.'
+    $joined = $body -join "`n"
+    $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($code -match 'set "_hbak=1"') ':ResetHostsDefault no longer sets _hbak=1 on a successful copy (regression).'
+    Assert-True ($code -match '&&') ':ResetHostsDefault no longer gates _hbak on the copy exit code via && (regression).'
+    Assert-True ($code -match '!\s*_hbak!"=="0"|!_hbak!"=="0"') ':ResetHostsDefault no longer aborts when _hbak is 0 (regression).'
+    Assert-True ($joined -match 'ABORT: hosts reset') ':ResetHostsDefault lost its abort log when backup fails (regression).'
+    Assert-True ($code -match 'goto RestoreHosts') ':ResetHostsDefault does not bail to RestoreHosts when backup fails - it would still overwrite (regression).'
+}
+
+# ===============================================================================
+# 63. :PresetBegin must verify the JSON temp landed before PRESET_MODE=1, and
+#     every built-in/custom preset caller must honour a failed begin.
+# ===============================================================================
+Invoke-Test ':PresetBegin refuses to run when the JSON temp is unwritable' {
+    $cmd = Read-Lines $CmdPath
+    $pb = Get-RoutineBody -Lines $cmd -Label 'PresetBegin'
+    $pb = @($pb)
+    Assert-True ($pb.Count -gt 0) ':PresetBegin body empty.'
+    $joined = $pb -join "`n"
+    $code = @($pb | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($joined -match 'if not exist "%PRESET_JSON_TMP%"') ':PresetBegin no longer verifies the JSON temp file landed (regression).'
+    Assert-True ($code -match 'exit /b 1') ':PresetBegin no longer exits nonzero when the JSON temp is missing (regression).'
+    Assert-True ($code -match 'PRESET_MODE=1') ':PresetBegin no longer sets PRESET_MODE=1 on the success path.'
+    $gateAt = $joined.IndexOf('if not exist "%PRESET_JSON_TMP%"')
+    $modeAt = $joined.IndexOf('set "PRESET_MODE=1"')
+    Assert-True ($gateAt -ge 0 -and $modeAt -gt $gateAt) ':PresetBegin sets PRESET_MODE before verifying the JSON temp (regression).'
+
+    foreach ($r in 'PresetLight','PresetModerate','PresetHeavy') {
+        $t = ((Get-RoutineBody -Lines $cmd -Label $r) -join "`n")
+        Assert-True ($t -match '(?i)call :PresetBegin') ":$r no longer calls :PresetBegin."
+        Assert-True ($t -match '(?i)if errorlevel 1 goto MenuPresets') ":$r does not abort when :PresetBegin fails - it would apply with no JSON undo (regression)."
+    }
+    $all = $cmd -join "`n"
+    Assert-True ($all -match '(?i)call :PresetBegin custom_%_pbase%[\s\S]{0,120}if errorlevel 1 goto MenuPresets') 'Custom preset apply does not abort when :PresetBegin fails (regression).'
+}
+
+# ===============================================================================
+# 64. :RestoreHostsBak must fall back to Documents hosts_*.bak when the local
+#     hosts.bak is missing (ApplyHosts can succeed with doc-only undo).
+# ===============================================================================
+Invoke-Test ':RestoreHostsBak falls back to Documents hosts_*.bak' {
+    $body = Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'RestoreHostsBak'
+    $body = @($body)
+    Assert-True ($body.Count -gt 0) ':RestoreHostsBak body empty.'
+    $joined = $body -join "`n"
+    Assert-True ($joined -match 'hosts_\*\.bak') ':RestoreHostsBak no longer looks for Documents hosts_*.bak (regression).'
+    Assert-True ($joined -match 'dir /b /o-d') ':RestoreHostsBak no longer picks the newest Documents hosts backup (regression).'
+    Assert-True ($joined -match 'copy /y "!_hsrc!"') ':RestoreHostsBak no longer restores from the resolved _hsrc path (regression).'
+}
+
+# ===============================================================================
+# 65. :TimerResApply must route the registry write through _FAILS + :Summary
+#     (no unconditional [OK] after :SafeRegAdd).
+# ===============================================================================
+Invoke-Test ':TimerResApply reports via :Summary (gated on _FAILS)' {
+    $body = Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'TimerResApply'
+    $body = @($body)
+    Assert-True ($body.Count -gt 0) ':TimerResApply body empty.'
+    $joined = $body -join "`n"
+    $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($joined -match 'set "_FAILS=0"') ':TimerResApply does not reset _FAILS before SafeRegAdd (regression).'
+    Assert-True ($joined -match 'call :SafeRegAdd') ':TimerResApply no longer writes GlobalTimerResolutionRequests via :SafeRegAdd.'
+    Assert-True ($joined -match 'call :Summary') ':TimerResApply prints an unconditional status instead of :Summary (regression).'
+    Assert-True ($code -notmatch '(?im)^\s*echo\s+\[OK\]\s+Timer-resolution') ':TimerResApply still echoes an unconditional [OK] for the install line (regression).'
+}
+
+# ===============================================================================
+# 66. SteamLight must verify the Desktop .lnk landed before claiming it in [OK].
+#     The launcher .bat is already gated; COM / Desktop-redirect failures must not
+#     still print "shortcut was placed on your Desktop".
+# ===============================================================================
+Invoke-Test 'SteamLight verifies the Desktop shortcut before claiming it' {
+    $body = Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'SteamLight'
+    $body = @($body)
+    Assert-True ($body.Count -gt 0) ':SteamLight body empty.'
+    $joined = $body -join "`n"
+    $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($joined -match 'SteamLight\.lnk') ':SteamLight no longer targets SteamLight.lnk (regression).'
+    Assert-True ($joined -match 'Test-Path -LiteralPath \$lnk') ':SteamLight no longer verifies the .lnk landed after Save() (regression).'
+    Assert-True ($code -match 'if errorlevel 1') ':SteamLight no longer branches on the shortcut PS exit code (regression).'
+    Assert-True ($joined -match '\[WARN\].*shortcut') ':SteamLight lost its [WARN] when the Desktop shortcut fails (regression).'
+    # Desktop claim must share the success branch with the errorlevel gate, not stand alone.
+    Assert-True ($joined -match 'if errorlevel 1[\s\S]{0,400}shortcut was placed on your Desktop') ':SteamLight Desktop-shortcut [OK] is no longer gated on the shortcut PS exit code (regression).'
+}
+
+# ===============================================================================
+# 67. Memory-compression disable must not swallow failures, and the preset path
+#     must bump _FAILS so :Summary stays honest.
+# ===============================================================================
+Invoke-Test 'Memory compression disable reports real outcome (not SilentlyContinue)' {
+    $cmd = Read-Lines $CmdPath
+    foreach ($r in 'MemCompress','DoMemCompressOff') {
+        $body = Get-RoutineBody -Lines $cmd -Label $r
+        $body = @($body)
+        Assert-True ($body.Count -gt 0) ":$r body empty."
+        $joined = $body -join "`n"
+        $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+        Assert-True ($joined -match "ErrorActionPreference='Stop'") ":$r still uses SilentlyContinue - Disable-MMAgent failures would be invisible (regression)."
+        Assert-True ($code -match 'if errorlevel 1') ":$r no longer branches on the PS exit code (regression)."
+        Assert-True ($code -notmatch 'SilentlyContinue') ":$r still invokes Disable-MMAgent with SilentlyContinue (regression)."
+    }
+    $dmcBody = Get-RoutineBody -Lines $cmd -Label 'DoMemCompressOff'
+    $dmc = (@($dmcBody) -join "`n")
+    Assert-True ($dmc -match 'set /a _FAILS\+=1') ':DoMemCompressOff no longer bumps _FAILS on failure - preset :Summary would stay green (regression).'
+}
+
+# ===============================================================================
+# 68. NVIDIA telemetry tasks are disabled by name prefix (like privacy extras),
+#     never via hardcoded schtasks /TN GUID paths.
+# ===============================================================================
+Invoke-Test 'NVIDIA telemetry tasks disabled by name, not hardcoded TN paths' {
+    $cmd = Read-Lines $CmdPath
+    $b = Get-RoutineBody -Lines $cmd -Label 'DisableNvidiaTelemetryTasks'
+    $b = @($b)
+    Assert-True ($b.Count -gt 0) ':DisableNvidiaTelemetryTasks helper missing.'
+    $code = @($b | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($code -match 'Get-ScheduledTask') ':DisableNvidiaTelemetryTasks no longer looks tasks up by name.'
+    Assert-True ($code -match 'Disable-ScheduledTask') ':DisableNvidiaTelemetryTasks no longer disables anything.'
+    Assert-True ($code -match 'NvTmRep_') ':DisableNvidiaTelemetryTasks lost the NvTmRep_ name prefix.'
+    Assert-True ($code -match 'NvTmMon_') ':DisableNvidiaTelemetryTasks lost the NvTmMon_ name prefix.'
+    Assert-True ($code -match 'NvDriverUpdateCheckDaily_') ':DisableNvidiaTelemetryTasks lost the NvDriverUpdateCheckDaily_ name prefix.'
+    Assert-True ($code -notmatch '(?i)schtasks') ':DisableNvidiaTelemetryTasks INVOKES schtasks - use name lookup like :DisableTelemetryTasks.'
+    $si = -1; $fi = -1; $oi = -1
+    for ($i = 0; $i -lt $b.Count; $i++) {
+        if ($si -lt 0 -and $b[$i] -match '\[SKIP\]') { $si = $i }
+        if ($fi -lt 0 -and $b[$i] -match '\[FAIL\]') { $fi = $i }
+        if ($oi -lt 0 -and $b[$i] -match '\[OK\]')   { $oi = $i }
+    }
+    Assert-True ($si -ge 0 -and $fi -ge 0 -and $oi -ge 0) ':DisableNvidiaTelemetryTasks lost [SKIP]/[FAIL]/[OK] reporting.'
+    Assert-True ($si -lt $oi -and $fi -lt $oi) ':DisableNvidiaTelemetryTasks prints [OK] before its guard branches.'
+
+    foreach ($r in 'GpuNvidia','DoGpuTelemetryOff') {
+        $tbody = Get-RoutineBody -Lines $cmd -Label $r
+        $tbody = @($tbody)
+        $t = $tbody -join "`n"
+        Assert-True ($t -match 'call :DisableNvidiaTelemetryTasks') ":$r no longer calls :DisableNvidiaTelemetryTasks (regression)."
+        $tcode = @($tbody | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+        Assert-True ($tcode -notmatch 'B2FE1952') ":$r still hardcodes the old NVIDIA task GUID path (regression)."
+    }
+}
+
+# ===============================================================================
+# 69. Win11 quiet surface in :DoPrivacyCore - extra ContentDeliveryManager /
+#     Search box suggestions / TailoredExperiences keys (beyond the thin CDM
+#     slice already guarded by widgets/spotlight tests).
+# ===============================================================================
+Invoke-Test ':DoPrivacyCore quiet surface (CDM / Search suggestions / TailoredExperiences)' {
+    $pc = (Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'DoPrivacyCore') -join "`n"
+    Assert-True ($pc -match '(?i)SubscribedContent-338387Enabled"\s+REG_DWORD\s+0') 'CDM SubscribedContent-338387Enabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)SubscribedContent-338393Enabled"\s+REG_DWORD\s+0') 'CDM SubscribedContent-338393Enabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)SubscribedContent-353694Enabled"\s+REG_DWORD\s+0') 'CDM SubscribedContent-353694Enabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)SubscribedContent-353696Enabled"\s+REG_DWORD\s+0') 'CDM SubscribedContent-353696Enabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"SoftLandingEnabled"\s+REG_DWORD\s+0') 'SoftLandingEnabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"PreInstalledAppsEnabled"\s+REG_DWORD\s+0') 'PreInstalledAppsEnabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"OemPreInstalledAppsEnabled"\s+REG_DWORD\s+0') 'OemPreInstalledAppsEnabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"RotatingLockScreenEnabled"\s+REG_DWORD\s+0') 'RotatingLockScreenEnabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"RotatingLockScreenOverlayEnabled"\s+REG_DWORD\s+0') 'RotatingLockScreenOverlayEnabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"DisableSearchBoxSuggestions"\s+REG_DWORD\s+1') 'DisableSearchBoxSuggestions=1 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"TailoredExperiencesWithDiagnosticDataEnabled"\s+REG_DWORD\s+0') 'TailoredExperiencesWithDiagnosticDataEnabled=0 missing from :DoPrivacyCore.'
+    Assert-True ($pc -match '(?i)"DisableTailoredExperiencesWithDiagnosticData"\s+REG_DWORD\s+1') 'DisableTailoredExperiencesWithDiagnosticData=1 missing from :DoPrivacyCore.'
+}
+
+# ===============================================================================
+# 70. Game Bar residual is opt-in (Performance prompt / :DoGameBarOff), never
+#     folded into :DoPerformanceCore (recording is already off there).
+# ===============================================================================
+Invoke-Test 'Game Bar residual is prompt-gated via :DoGameBarOff (not in :DoPerformanceCore)' {
+    $cmd = Read-Lines $CmdPath
+    $core = (Get-RoutineBody -Lines $cmd -Label 'DoPerformanceCore') -join "`n"
+    Assert-True ($core -notmatch '(?i)AppCaptureEnabled') ':DoPerformanceCore must not write AppCaptureEnabled - Game Bar residual is opt-in.'
+    Assert-True ($core -notmatch '(?i)UseNexusForGameBarEnabled') ':DoPerformanceCore must not write UseNexusForGameBarEnabled - Game Bar residual is opt-in.'
+    Assert-True ($core -notmatch '(?i)call :DoGameBarOff') ':DoPerformanceCore must not call :DoGameBarOff.'
+
+    $perf = (Get-RoutineBody -Lines $cmd -Label 'Performance') -join "`n"
+    Assert-True ($perf -match '(?i)call :DoGameBarOff') ':Performance no longer offers :DoGameBarOff (regression).'
+    Assert-True ($perf -match '(?i)%_q12%') ':Performance Game Bar residual is not gated on _q12 (regression).'
+
+    $gb = (Get-RoutineBody -Lines $cmd -Label 'DoGameBarOff') -join "`n"
+    Assert-True ($gb.Length -gt 0) ':DoGameBarOff helper missing.'
+    Assert-True ($gb -match '(?i)"AppCaptureEnabled"\s+REG_DWORD\s+0') ':DoGameBarOff missing AppCaptureEnabled=0.'
+    Assert-True ($gb -match '(?i)"UseNexusForGameBarEnabled"\s+REG_DWORD\s+0') ':DoGameBarOff missing UseNexusForGameBarEnabled=0.'
+    Assert-True ($gb -match '(?i)"ShowStartupPanel"\s+REG_DWORD\s+0') ':DoGameBarOff missing ShowStartupPanel=0.'
+
+    $check = (Get-RoutineBody -Lines $cmd -Label 'PresetCheckLine') -join "`n"
+    Assert-True ($check -match '(?i)"%_k%"=="gamebar_off"') 'Preset validator lost gamebar_off.'
+}
+
+# ===============================================================================
+# 71. Edge nudges are opt-in (:DoEdgeNudgesOff + Privacy prompt + preset key);
+#     documented Edge ADMX policy values only.
+# ===============================================================================
+Invoke-Test 'Edge nudges are opt-in via :DoEdgeNudgesOff (Privacy prompt + edge_nudges_off)' {
+    $cmd = Read-Lines $CmdPath
+    $core = (Get-RoutineBody -Lines $cmd -Label 'DoPrivacyCore') -join "`n"
+    Assert-True ($core -notmatch '(?i)HubsSidebarEnabled') ':DoPrivacyCore must not force Edge HubsSidebarEnabled - Edge nudges are opt-in.'
+    Assert-True ($core -notmatch '(?i)call :DoEdgeNudgesOff') ':DoPrivacyCore must not call :DoEdgeNudgesOff.'
+
+    $priv = (Get-RoutineBody -Lines $cmd -Label 'Privacy') -join "`n"
+    Assert-True ($priv -match '(?i)call :DoEdgeNudgesOff') ':Privacy no longer offers :DoEdgeNudgesOff (regression).'
+
+    $edge = (Get-RoutineBody -Lines $cmd -Label 'DoEdgeNudgesOff') -join "`n"
+    Assert-True ($edge.Length -gt 0) ':DoEdgeNudgesOff helper missing.'
+    Assert-True ($edge -match '(?i)"HubsSidebarEnabled"\s+REG_DWORD\s+0') ':DoEdgeNudgesOff missing HubsSidebarEnabled=0.'
+    Assert-True ($edge -match '(?i)"EdgeShoppingAssistantEnabled"\s+REG_DWORD\s+0') ':DoEdgeNudgesOff missing EdgeShoppingAssistantEnabled=0.'
+    Assert-True ($edge -match '(?i)"HideFirstRunExperience"\s+REG_DWORD\s+1') ':DoEdgeNudgesOff missing HideFirstRunExperience=1.'
+    Assert-True ($edge -match '(?i)SOFTWARE\\Policies\\Microsoft\\Edge') ':DoEdgeNudgesOff not writing under Policies\\Microsoft\\Edge.'
+
+    $check = (Get-RoutineBody -Lines $cmd -Label 'PresetCheckLine') -join "`n"
+    Assert-True ($check -match '(?i)"%_k%"=="edge_nudges_off"') 'Preset validator lost edge_nudges_off.'
 }
 
 # ---- summary ------------------------------------------------------------------
