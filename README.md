@@ -315,11 +315,19 @@ line.
 Newest first. Feature details live in the sections above — this is just what
 changed.
 
+- **Fixed: parentheses in a status message crashed the tool (mitigations, IPv6).**
+  `:Summary` printed its message inside a one-line `if ( ) else ( )` block, so the
+  first `)` in the text — e.g. the mitigations line's `(incl. Downfall/GDS)`, or an
+  empty `()` — closed the block early and aborted the script (*"was unexpected at this
+  time"*). On IPv6 the same early-close broke the flow so it looked like IPv6 wasn't
+  disabled. `:Summary` is now written with `goto` branching so the message is never
+  inside `( )`; any caller text is safe. Guarded by **test 58**, which fails if the
+  routine is ever put back into a parenthesised block.
 - **System tools (menu 12).** New **PATH editor** — System or User, lists entries, flags dead ones, add / remove-by-number / drop-dead / de-duplicate — and **find what is locking a file** (Restart Manager: lists every holder, marks critical Windows processes and refuses to close them, optional confirmed per-process close, checks for parens in paths). The PATH editor never uses `setx` (it crops at 1024 characters and freezes `%SystemRoot%` into literal paths), backs up the whole value first, and broadcasts the change so new programs see it without a sign-out. Guarded by tests 31–42, 55.
 - **Privacy: Windows AI off by policy.** Copilot (user *and* machine policy), **Recall** (enablement blocked, snapshot saving off, data analysis off), **Click to Do**, plus inking/typing personalization and online speech recognition. It rides along everywhere privacy is applied — menu 3, *Apply recommended*, and every preset — through the same backed-up, reversible path. The Privacy screen now also states two things it previously implied away: `AllowTelemetry=0` is only honored on Enterprise/Education (**Home and Pro clamp it to Basic, 1**), and stopping DiagTrack also stops **Xbox achievement sync and the Feedback Hub**. Guarded by tests 43–46.
 - **More optional knobs.** *Performance:* Storage Sense off · Windows Search classic scope · **SysMain/Superfetch off**, which first probes the Windows disk and warns before the prompt if it looks like a mechanical HDD. *Power:* CPU power throttling off. *Network:* Delivery Optimization off. *Privacy:* four more telemetry scheduled tasks — looked up **by name** and reported as *found vs disabled* instead of a blind "done" — plus an optional **firewall block** for the telemetry service that flips Windows' own DiagTrack rules. Guarded by tests 47–50.
 - **Three popular tweaks verified against Microsoft's documentation and declined** — regrouping svchost (`SvcHostSplitThresholdInKB`), lowering `ServicesPipeTimeout`, and disabling the prefetcher. They are listed with their reasons on *What was excluded*, and test 51 fails if any of them is ever quietly added back.
-- **Static test harness expanded to 57 checks** — every new detector verified against a deliberately broken copy.
+- **Static test harness expanded to 58 checks** — every new detector verified against a deliberately broken copy.
 - **Elevation works when the script path contains an apostrophe** (e.g. `C:\Users\O'Brien\`) — the UAC relaunch now passes `%~f0` via `$env:PT_SELF` instead of embedding it in `Start-Process -FilePath '…'`, where a `'` broke the string and killed the relaunch with no prompt.
 - **Per-value backups decline non-ASCII string data instead of corrupting it.** Undo files are written with `echo` (console code page), so non-ASCII `REG_SZ` *prior data* came back as mojibake; such values are now marked *not auto-restorable — use the full backup* (like `REG_BINARY`) and skipped on preset restore. The full `reg export` still restores them correctly.
 - **Idempotent registry writes.** Applying a value already at the target prints `[SKIP] … already set` and returns **before** writing a backup, so a re-run or re-applied preset can't bury the true-original undo.
@@ -359,6 +367,40 @@ changed.
 - **Bundled-file error handling.** Missing/empty `boot.config` or `hosts`, and copy failures, now stop with a clear message.
 
 ---
+
+## Troubleshooting
+
+Newest issues first — most are about *elevation* or *reboots*, because that's where
+Windows quietly ignores a change that the script did make.
+
+- **A tweak "did nothing" until I rebooted.** Expected for several of them — CPU
+  mitigations, memory compression, NVMe flags, boot timers, timer resolution. The
+  registry value is written immediately; Windows only acts on it at boot. Reboot, then
+  re-check.
+- **A privileged change shows `[WARN]` / a `[FAIL]` line.** The window isn't elevated,
+  or the key is protected. Close it, relaunch, approve the UAC prompt. `[WARN]` in
+  limited mode is honest reporting, not a failure of the script.
+- **`AllowTelemetry=0` didn't stick / telemetry still runs.** On **Home and Pro**,
+  Windows clamps `AllowTelemetry` to Basic (1) — only Enterprise/Education honor 0. The
+  script says so on the Privacy screen; this is Windows, not a bug.
+- **Disable CPU mitigations, but another tool still flags Downfall/GDS.** Make sure
+  you're on the current build — the combined value is `0x2000003` (it used to be `3`,
+  which left Downfall mitigated). Then **reboot** and re-check with
+  `Get-SpeculationControlSettings` in PowerShell; the mitigation change only applies at
+  boot.
+- **Processor-scheduling dialog shows "background services" after option 1 (42).** Not a
+  bug: `42` is a **fixed** quantum, and a fixed quantum treats all apps equally, which is
+  exactly what that radio reports. If you want the foreground-favouring value, pick
+  **option 2 (38)** — the same value Windows' own *Programs* radio writes.
+- **A backup didn't restore a value cleanly.** Non-ASCII `REG_SZ` data and `REG_BINARY`
+  are marked *not auto-restorable — use the full backup*; the small per-value `.reg`
+  undo can't carry them, but the full `reg export` restores them correctly.
+- **Backups aren't in my Documents.** They're written under whichever account is
+  elevated. If you elevated with a *different* admin account, they're in that account's
+  Documents.
+- **A short black window flickers during DNS / OpenAsar / restore-point / status.** That's
+  a deliberately minimized, short-lived PowerShell window so the main console's
+  font/colors aren't disturbed. Normal.
 
 ## Notes & caveats
 
@@ -411,7 +453,7 @@ documentation and left out on the evidence:
 
 Sincript ships with a **static-analysis** harness in `tests/`. `PerfTweaks.cmd`
 is interactive and changes the system, so it can't be safely unit-tested by
-*running* it; instead `tests/Run-Tests.ps1` (57 checks on stock Windows
+*running* it; instead `tests/Run-Tests.ps1` (58 checks on stock Windows
 PowerShell 5.1 — no Pester) parses the script text for invariants that tend to
 break silently, including:
 
@@ -432,7 +474,7 @@ Run from the repository root:
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Run-Tests.ps1
 ```
 
-Exit code `0` means all 57 checks passed; `1` means at least one failed, with
+Exit code `0` means all 58 checks passed; `1` means at least one failed, with
 the offending detail printed. See `tests/README.md` for the full numbered list.
 
 ---
