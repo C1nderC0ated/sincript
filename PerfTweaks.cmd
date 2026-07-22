@@ -139,7 +139,7 @@ rem ============================================================================
 cls
 call :Logo
 echo ============================  CLEANUP ^& REPAIR  ===================================
-echo     1.  Clean temp / logs / caches      (+ optional: clear all Event Viewer logs)
+echo     1.  Clean temp / logs / caches (+ optional: shaders, Recycle Bin, Event Viewer, Disk Cleanup)
 echo     2.  DISM + SFC system integrity
 echo     3.  Reset Windows Update components
 echo     4.  Re-register Microsoft Store / apps
@@ -309,19 +309,64 @@ rem ============================================================================
 cls
 call :Logo
 echo ================================  CLEANUP  ========================================
-echo  Deletes temp files, Windows logs, the thumbnail cache and telemetry caches, then
-echo  flushes the DNS cache. Only files are removed; nothing is changed in the registry.
+echo  Deletes temp files, Windows logs, thumbnail cache, crash dumps, Delivery Optimization
+echo  cache, and telemetry caches, then flushes DNS. Optional: shader caches, Recycle Bin,
+echo  Event Viewer, or launch Disk Cleanup / Storage Sense. Only files are removed; nothing
+echo  is changed in the registry. Prefetch is intentionally left alone.
 echo =====================================================================================
 set "_c="
 set /p "_c=Proceed? (Y/N): "
 if /i not "%_c%"=="Y" goto MenuCleanup
+rem  Outer free-space bracket: measure before core + optionals, report once at the end.
+set "_CLEAN_OUTER=1"
+call :FreeSpaceSnap
+set "_FREE_BEFORE=%_FREE_BYTES%"
 call :DoCleanupCore
+set "_sh="
+set /p "_sh=Also clear DirectX / NVIDIA download shader caches (next game may hitch while they rebuild)? (Y/N): "
+if /i not "%_sh%"=="Y" goto _clShDone
+if defined _cleanLocalAppData if exist "%LocalAppData%\D3DSCache\" call :Run "del /f /s /q ""%LocalAppData%\D3DSCache\*.*"""
+set "_cleanProgramData="
+call :CleanRoot ProgramData "%ProgramData%"
+if defined _cleanProgramData if exist "%ProgramData%\NVIDIA Corporation\Downloader\" call :Run "del /f /s /q ""%ProgramData%\NVIDIA Corporation\Downloader\*.*"""
+
+:_clShDone
+set "_rb="
+set /p "_rb=Also empty the Recycle Bin (irreversible)? (Y/N): "
+if /i not "%_rb%"=="Y" goto _clRbDone
+echo   ^> Emptying Recycle Bin...
+call :Log "EXEC-PS: Clear-RecycleBin"
+start "" /min /wait powershell -NoProfile -Command "try{ Clear-RecycleBin -Force -ErrorAction Stop; exit 0 }catch{ exit 1 }"
+if errorlevel 1 ( echo   [WARN] Recycle Bin could not be emptied. ) else ( echo   [OK] Recycle Bin emptied. )
+
+:_clRbDone
 set "_ev="
 set /p "_ev=Also clear ALL Event Viewer logs, including the Security/audit log (irreversible)? (Y/N): "
 if /i not "%_ev%"=="Y" goto _clEvDone
 for /f "tokens=*" %%G in ('wevtutil el') do call :Run "wevtutil cl ""%%G"""
 
 :_clEvDone
+set "_cm="
+set /p "_cm=Also open Windows Disk Cleanup (cleanmgr) for the system drive? Sincript does not wait for it. (Y/N): "
+if /i not "%_cm%"=="Y" goto _clCmDone
+set "_drv=%SystemDrive:~0,1%"
+start "" cleanmgr.exe /d %_drv%
+call :Log "LAUNCH: cleanmgr /d %_drv%"
+echo   [OK] Disk Cleanup launched for %_drv%:.
+
+:_clCmDone
+set "_ss="
+set /p "_ss=Also open Storage Sense settings (configure / run from Windows Settings)? (Y/N): "
+if /i not "%_ss%"=="Y" goto _clSsDone
+start "" ms-settings:storagesense
+call :Log "LAUNCH: ms-settings:storagesense"
+echo   [OK] Storage Sense settings opened.
+
+:_clSsDone
+call :FreeSpaceSnap
+set "_FREE_AFTER=%_FREE_BYTES%"
+call :FreeSpaceReport
+set "_CLEAN_OUTER="
 echo [OK] Cleanup done.
 pause
 goto MenuCleanup
@@ -341,6 +386,13 @@ rem
 rem  So each root is proven ONCE, here, before any delete runs, and every delete below is
 rem  gated on its root having passed. Anything unproven is skipped out loud rather than
 rem  guessed at - a skipped cleanup costs disk space, a wrong one costs the machine.
+rem  When called from interactive :Cleanup, _CLEAN_OUTER=1 so free-space is reported once
+rem  after optional buckets. Preset / recommended callers get snap+report here.
+if defined _CLEAN_OUTER goto _clCoreBody
+call :FreeSpaceSnap
+set "_FREE_BEFORE=%_FREE_BYTES%"
+
+:_clCoreBody
 set "_cleanTEMP=" & set "_cleanSystemRoot=" & set "_cleanLocalAppData="
 call :CleanRoot TEMP "%TEMP%"
 call :CleanRoot SystemRoot "%SystemRoot%"
@@ -358,8 +410,16 @@ if defined _cleanSystemRoot call :Run "del /f /q ""%SystemRoot%\setupact.log"""
 if defined _cleanSystemRoot call :Run "del /f /q ""%SystemRoot%\setuperr.log"""
 if defined _cleanSystemRoot call :Run "del /f /q ""%SystemRoot%\Panther\*"""
 if defined _cleanLocalAppData call :Run "del /f /q ""%LocalAppData%\Microsoft\Windows\WebCache\*.*"""
+rem  Regenerating junk safe for presets: crash dumps, minidumps, Delivery Optimization cache.
+if defined _cleanLocalAppData if exist "%LocalAppData%\CrashDumps\" call :Run "del /f /s /q ""%LocalAppData%\CrashDumps\*.*"""
+if defined _cleanSystemRoot if exist "%SystemRoot%\Minidump\" call :Run "del /f /q ""%SystemRoot%\Minidump\*"""
+if defined _cleanSystemRoot if exist "%SystemRoot%\SoftwareDistribution\DeliveryOptimization\Cache\" call :Run "del /f /s /q ""%SystemRoot%\SoftwareDistribution\DeliveryOptimization\Cache\*.*"""
 rem  No path, nothing to collapse - never gated.
 call :Run "ipconfig /flushdns"
+if defined _CLEAN_OUTER goto :eof
+call :FreeSpaceSnap
+set "_FREE_AFTER=%_FREE_BYTES%"
+call :FreeSpaceReport
 goto :eof
 rem =====================================================================================
 rem  ACTION: DISM + SFC
@@ -1457,6 +1517,9 @@ call :Logo
 echo ===============================  CURRENT STATUS  ==================================
 echo   OS build %WIN_BUILD%   Win11=%IS_WIN11%   GPU=%GPU%
 echo -----------------------------------------------------------------------------------
+echo [Disk]  system drive free space
+call :FreeSpaceSnap
+if defined _FREE_HUMAN ( echo   !_FREE_HUMAN! ) else ( echo   could not measure )
 echo [Power plan]
 for /f "tokens=*" %%i in ('powercfg /getactivescheme') do echo   %%i
 echo [Hibernation]  (0x0 = off, 0x1 = on)
@@ -1474,6 +1537,8 @@ call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32Prio
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "LargeSystemCache"
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "FeatureSettingsOverride"
 call :ShowReg "HKCU\System\GameConfigStore" "GameDVR_Enabled"
+call :ShowReg "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled"
+call :ShowReg "HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer" "DisableSearchBoxSuggestions"
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" "DisabledComponents"
 echo [GPU scheduling / HAGS]  (0x2 = on/default, 0x1 = off; toggle under Advanced)
 call :ShowReg "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode"
@@ -1662,10 +1727,12 @@ echo [OK] Autostart removed and the helper stopped.
 echo.
 set "_c2="
 set /p "_c2=Also revert GlobalTimerResolutionRequests to default (off)? (Y/N): "
-if /i "%_c2%"=="Y" (
-    call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests" REG_DWORD 0 "Global timer resolution requests off"
-    echo [OK] Reverted. REBOOT to fully apply.
-)
+if /i not "%_c2%"=="Y" goto MenuApps
+set "_FAILS=0"
+call :SafeRegAdd "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests" REG_DWORD 0 "Global timer resolution requests off"
+echo.
+call :Summary "GlobalTimerResolutionRequests reverted to off."
+echo      REBOOT to fully apply.
 pause
 goto MenuApps
 
@@ -2454,6 +2521,43 @@ call :Log "OK: FW DiagTrack found=!_fwc! blocked=!_fwn!"
 goto :eof
 
 rem =====================================================================================
+rem  HELPER: snapshot system-drive free space into _FREE_BYTES / _FREE_HUMAN
+rem =====================================================================================
+:FreeSpaceSnap
+set "_FREE_BYTES="
+set "_FREE_HUMAN="
+del "%TEMP%\pt_free.txt" >nul 2>&1
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='SilentlyContinue'; $letter=if($env:SystemDrive){$env:SystemDrive.Substring(0,1)}else{'C'}; $d=Get-CimInstance Win32_LogicalDisk -Filter ('DeviceID='''+$letter+':'''); if(-not $d -or $null -eq $d.FreeSpace){exit 1}; $b=[int64]$d.FreeSpace; $t=[int64]$d.Size; $line=('{0}|{1:N1} GB free of {2:N1} GB on {3}:' -f $b,($b/1GB),($t/1GB),$letter); $line | Out-File (Join-Path $env:TEMP 'pt_free.txt') -Encoding ASCII"
+if not exist "%TEMP%\pt_free.txt" goto :eof
+for /f "usebackq tokens=1,* delims=|" %%A in ("%TEMP%\pt_free.txt") do (
+    set "_FREE_BYTES=%%A"
+    set "_FREE_HUMAN=%%B"
+)
+del "%TEMP%\pt_free.txt" >nul 2>&1
+goto :eof
+
+rem  HELPER: print free-space delta from _FREE_BEFORE / _FREE_AFTER byte strings
+rem =====================================================================================
+:FreeSpaceReport
+if not defined _FREE_BEFORE goto _fsFail
+if not defined _FREE_AFTER goto _fsFail
+set "PT_FB=%_FREE_BEFORE%"
+set "PT_FA=%_FREE_AFTER%"
+del "%TEMP%\pt_freed.txt" >nul 2>&1
+start "" /min /wait powershell -NoProfile -Command "$ErrorActionPreference='Stop'; try{ $b=[int64]$env:PT_FB; $a=[int64]$env:PT_FA; $d=$a-$b; if($d -ge 1048576){ $s='  [Disk] Freed about '+[math]::Round($d/1MB,1)+' MB  now '+[math]::Round($a/1GB,1)+' GB free.' } elseif($d -le -1048576){ $s='  [Disk] Free space dropped about '+[math]::Round((-$d)/1MB,1)+' MB  other activity; now '+[math]::Round($a/1GB,1)+' GB free.' } else { $s='  [Disk] No measurable change  now '+[math]::Round($a/1GB,1)+' GB free.' }; $s | Out-File (Join-Path $env:TEMP 'pt_freed.txt') -Encoding ASCII }catch{ exit 1 }"
+set "PT_FB=" & set "PT_FA="
+if exist "%TEMP%\pt_freed.txt" (
+    type "%TEMP%\pt_freed.txt"
+    del "%TEMP%\pt_freed.txt" >nul 2>&1
+) else (
+    echo   [Disk] Could not measure free-space change.
+)
+goto :eof
+
+:_fsFail
+echo   [Disk] Could not measure free space.
+goto :eof
+
 rem  HELPER: prove a cleanup root before anything is deleted under it
 rem =====================================================================================
 :CleanRoot
