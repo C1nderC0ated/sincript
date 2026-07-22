@@ -1531,19 +1531,24 @@ Invoke-Test ':RestoreHostsBak falls back to Documents hosts_*.bak' {
 }
 
 # ===============================================================================
-# 65. :TimerResApply must route the registry write through _FAILS + :Summary
-#     (no unconditional [OK] after :SafeRegAdd).
+# 65. :TimerResApply and :TimerResRemove must route GlobalTimerResolutionRequests
+#     through _FAILS + :Summary (no unconditional [OK] after :SafeRegAdd).
+#     Apply was fixed first; Remove had the same honesty gap on the optional revert.
 # ===============================================================================
-Invoke-Test ':TimerResApply reports via :Summary (gated on _FAILS)' {
-    $body = Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'TimerResApply'
-    $body = @($body)
-    Assert-True ($body.Count -gt 0) ':TimerResApply body empty.'
-    $joined = $body -join "`n"
-    $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
-    Assert-True ($joined -match 'set "_FAILS=0"') ':TimerResApply does not reset _FAILS before SafeRegAdd (regression).'
-    Assert-True ($joined -match 'call :SafeRegAdd') ':TimerResApply no longer writes GlobalTimerResolutionRequests via :SafeRegAdd.'
-    Assert-True ($joined -match 'call :Summary') ':TimerResApply prints an unconditional status instead of :Summary (regression).'
-    Assert-True ($code -notmatch '(?im)^\s*echo\s+\[OK\]\s+Timer-resolution') ':TimerResApply still echoes an unconditional [OK] for the install line (regression).'
+Invoke-Test ':TimerResApply / :TimerResRemove report registry via :Summary (gated on _FAILS)' {
+    $cmd = Read-Lines $CmdPath
+    foreach ($r in 'TimerResApply','TimerResRemove') {
+        $body = Get-RoutineBody -Lines $cmd -Label $r
+        $body = @($body)
+        Assert-True ($body.Count -gt 0) ":$r body empty."
+        $joined = $body -join "`n"
+        $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+        Assert-True ($joined -match 'set "_FAILS=0"') ":$r does not reset _FAILS before SafeRegAdd (regression)."
+        Assert-True ($joined -match 'call :SafeRegAdd') ":$r no longer writes GlobalTimerResolutionRequests via :SafeRegAdd."
+        Assert-True ($joined -match 'call :Summary') ":$r prints an unconditional status instead of :Summary after the registry write (regression)."
+        Assert-True ($code -notmatch '(?im)^\s*echo\s+\[OK\]\s+Reverted') ":$r still echoes unconditional [OK] Reverted after SafeRegAdd (regression)."
+        Assert-True ($code -notmatch '(?im)^\s*echo\s+\[OK\]\s+Timer-resolution') ":$r still echoes an unconditional [OK] for the install line (regression)."
+    }
 }
 
 # ===============================================================================
@@ -1689,6 +1694,105 @@ Invoke-Test 'Edge nudges are opt-in via :DoEdgeNudgesOff (Privacy prompt + edge_
 
     $check = (Get-RoutineBody -Lines $cmd -Label 'PresetCheckLine') -join "`n"
     Assert-True ($check -match '(?i)"%_k%"=="edge_nudges_off"') 'Preset validator lost edge_nudges_off.'
+}
+
+# ===============================================================================
+# 72. Cleanup core gained crash dumps / minidumps / DO cache; Prefetch still out;
+#     free-space snap+report for non-outer (preset) callers.
+# ===============================================================================
+Invoke-Test ':DoCleanupCore adds safe regenerating junk; Prefetch stays excluded; free-space report' {
+    $body = Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'DoCleanupCore'
+    $body = @($body)
+    Assert-True ($body.Count -gt 0) ':DoCleanupCore body empty.'
+    $joined = $body -join "`n"
+    $code = @($body | Where-Object { $_.Trim() -notmatch '^(?i)(echo|rem)\b' }) -join "`n"
+    Assert-True ($joined -match '(?i)CrashDumps') ':DoCleanupCore missing CrashDumps cleanup.'
+    Assert-True ($joined -match '(?i)Minidump') ':DoCleanupCore missing Minidump cleanup.'
+    Assert-True ($joined -match '(?i)DeliveryOptimization\\Cache') ':DoCleanupCore missing DeliveryOptimization\Cache cleanup.'
+    Assert-True ($joined -match '(?i)if defined _cleanLocalAppData if exist "%LocalAppData%\\CrashDumps') ':CrashDumps delete is not gated on _cleanLocalAppData.'
+    Assert-True ($joined -match '(?i)if defined _cleanSystemRoot if exist "%SystemRoot%\\Minidump') ':Minidump delete is not gated on _cleanSystemRoot.'
+    Assert-True ($joined -match '(?i)if defined _cleanSystemRoot if exist "%SystemRoot%\\SoftwareDistribution\\DeliveryOptimization\\Cache') ':DO Cache delete is not gated on _cleanSystemRoot.'
+    $bad = @($body | Where-Object { $_ -match '(?i)\bdel\b' -and $_ -match '(?i)Prefetch' })
+    Assert-True ($bad.Count -eq 0) 'Prefetch is being deleted in :DoCleanupCore (regression).'
+    Assert-True ($joined -match 'call :FreeSpaceSnap') ':DoCleanupCore missing FreeSpaceSnap for preset path.'
+    Assert-True ($joined -match 'call :FreeSpaceReport') ':DoCleanupCore missing FreeSpaceReport for preset path.'
+    Assert-True ($code -notmatch '(?i)D3DSCache') ':DoCleanupCore must not clear D3DSCache - shader caches are interactive-only.'
+    Assert-True ($code -notmatch '(?i)Clear-RecycleBin') ':DoCleanupCore must not empty Recycle Bin.'
+    Assert-True ($code -notmatch '(?i)cleanmgr') ':DoCleanupCore must not launch cleanmgr.'
+    Assert-True ($code -notmatch '(?i)storagesense') ':DoCleanupCore must not open Storage Sense.'
+}
+
+# ===============================================================================
+# 73. Interactive :Cleanup optional buckets + OS tool launches; outer free-space.
+# ===============================================================================
+Invoke-Test ':Cleanup optional buckets and tool launches are prompt-gated; free-space bracketed' {
+    $body = Get-RoutineBody -Lines (Read-Lines $CmdPath) -Label 'Cleanup'
+    $body = @($body)
+    Assert-True ($body.Count -gt 0) ':Cleanup body empty.'
+    $joined = $body -join "`n"
+    Assert-True ($joined -match 'set "_CLEAN_OUTER=1"') ':Cleanup no longer sets _CLEAN_OUTER for outer free-space bracket.'
+    Assert-True ($joined -match 'call :FreeSpaceSnap') ':Cleanup missing FreeSpaceSnap.'
+    Assert-True ($joined -match 'call :FreeSpaceReport') ':Cleanup missing FreeSpaceReport.'
+    Assert-True ($joined -match '(?i)D3DSCache') ':Cleanup missing shader-cache optional.'
+    Assert-True ($joined -match '(?i)Clear-RecycleBin') ':Cleanup missing Recycle Bin optional.'
+    Assert-True ($joined -match '(?i)cleanmgr') ':Cleanup missing Disk Cleanup launch.'
+    Assert-True ($joined -match '(?i)storagesense') ':Cleanup missing Storage Sense launch.'
+    Assert-True ($joined -match '(?i)%_sh%') ':Cleanup shader bucket not gated on a prompt var.'
+    Assert-True ($joined -match '(?i)%_rb%') ':Cleanup Recycle Bin not gated on a prompt var.'
+    Assert-True ($joined -match '(?i)%_cm%') ':Cleanup cleanmgr not gated on a prompt var.'
+    Assert-True ($joined -match '(?i)%_ss%') ':Cleanup Storage Sense not gated on a prompt var.'
+    Assert-True ($joined -match 'call :CleanRoot ProgramData') ':Cleanup NVIDIA Downloader path missing ProgramData CleanRoot probe.'
+}
+
+# ===============================================================================
+# 74. Free-space helpers exist and Status shows Disk + new tweak proxies.
+# ===============================================================================
+Invoke-Test ':FreeSpaceSnap / :FreeSpaceReport exist; :Status shows Disk and new proxies' {
+    $cmd = Read-Lines $CmdPath
+    $snap = Get-RoutineBody -Lines $cmd -Label 'FreeSpaceSnap'
+    $snap = @($snap)
+    Assert-True ($snap.Count -gt 0) ':FreeSpaceSnap missing.'
+    $snapJ = $snap -join "`n"
+    Assert-True ($snapJ -match 'Win32_LogicalDisk') ':FreeSpaceSnap has no Win32_LogicalDisk probe.'
+    Assert-True ($snapJ -match '_FREE_BYTES') ':FreeSpaceSnap does not set _FREE_BYTES.'
+    $rep = Get-RoutineBody -Lines $cmd -Label 'FreeSpaceReport'
+    $rep = @($rep)
+    Assert-True ($rep.Count -gt 0) ':FreeSpaceReport missing.'
+    $repJ = $rep -join "`n"
+    Assert-True ($repJ -match '_FREE_BEFORE') ':FreeSpaceReport does not consult _FREE_BEFORE.'
+    Assert-True ($repJ -match '_FREE_AFTER') ':FreeSpaceReport does not consult _FREE_AFTER.'
+    $st = Get-RoutineBody -Lines $cmd -Label 'Status'
+    $st = @($st)
+    $stJ = $st -join "`n"
+    Assert-True ($stJ -match '(?i)\[Disk\]') ':Status missing [Disk] section.'
+    Assert-True ($stJ -match 'call :FreeSpaceSnap') ':Status does not call FreeSpaceSnap.'
+    Assert-True ($stJ -match 'AppCaptureEnabled') ':Status missing AppCaptureEnabled (Game Bar residual proxy).'
+    Assert-True ($stJ -match 'DisableSearchBoxSuggestions') ':Status missing DisableSearchBoxSuggestions (quiet-surface proxy).'
+}
+
+# ===============================================================================
+# 75. Cleanup deletes stay behind CleanRoot-proven flags.
+# ===============================================================================
+Invoke-Test 'Cleanup deletes stay behind CleanRoot-proven flags' {
+    $cmd = Read-Lines $CmdPath
+    $core = Get-RoutineBody -Lines $cmd -Label 'DoCleanupCore'
+    $core = @($core)
+    $coreJ = $core -join "`n"
+    Assert-True ($coreJ -match 'call :CleanRoot TEMP') ':DoCleanupCore missing TEMP CleanRoot.'
+    Assert-True ($coreJ -match 'call :CleanRoot SystemRoot') ':DoCleanupCore missing SystemRoot CleanRoot.'
+    Assert-True ($coreJ -match 'call :CleanRoot LocalAppData') ':DoCleanupCore missing LocalAppData CleanRoot.'
+    $coreDels = @($core | Where-Object { $_ -match '(?i)call :Run "del' -and $_ -match '%(TEMP|SystemRoot|LocalAppData)%' })
+    foreach ($ln in $coreDels) {
+        Assert-True ($ln -match '(?i)if defined _clean') (':DoCleanupCore has an ungated cleanup delete: ' + $ln.Trim())
+    }
+    $cu = Get-RoutineBody -Lines $cmd -Label 'Cleanup'
+    $cu = @($cu)
+    $cuJ = $cu -join "`n"
+    Assert-True ($cuJ -match 'call :CleanRoot ProgramData') ':Cleanup NVIDIA path missing ProgramData CleanRoot.'
+    $cuDels = @($cu | Where-Object { $_ -match '(?i)call :Run "del' -and $_ -match '%(LocalAppData|ProgramData)%' })
+    foreach ($ln in $cuDels) {
+        Assert-True ($ln -match '(?i)if defined _clean') (':Cleanup has an ungated cleanup delete: ' + $ln.Trim())
+    }
 }
 
 # ---- summary ------------------------------------------------------------------
